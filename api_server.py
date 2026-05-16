@@ -23,6 +23,8 @@ Endpoints:
   GET  /api/sar
 """
 import json, sys, os, time, threading, uuid, random
+
+_BANK_STATE = {"last_webhook": None, "txns_received": 0}
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
 
