@@ -36,9 +36,13 @@ def get_conn():
         port     = int(os.environ.get("MYSQLPORT", os.environ.get("DB_PORT",     3306)))
         db       = os.environ.get("MYSQLDATABASE", os.environ.get("DB_NAME",     "aml_tms"))
 
-    # Cloudflare tunnel uses port 443 with SSL
+    # Use SSL only for Cloudflare tunnel (port 443)
+    # Railway internal (port 3306) does not need SSL
     use_ssl = (port == 443)
     ssl_params = {"ssl": {"ssl_disabled": False}} if use_ssl else {}
+    # For Railway MySQL with sha2 auth — disable strict ssl verification
+    if not use_ssl and "railway" in host:
+        ssl_params = {"ssl": {"ssl_disabled": True}} if False else {}
 
     _conn = pymysql.connect(
         host=host, port=port, user=user, password=password,
@@ -46,7 +50,6 @@ def get_conn():
         cursorclass=pymysql.cursors.DictCursor,
         autocommit=True,
         connect_timeout=15,
-        auth_plugin="mysql_native_password",
         **ssl_params,
     )
     print(f"[DB] Connected to MySQL at {host}:{port}/{db}", flush=True)
