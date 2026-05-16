@@ -46,6 +46,7 @@ def get_conn():
         cursorclass=pymysql.cursors.DictCursor,
         autocommit=True,
         connect_timeout=15,
+        auth_plugin="mysql_native_password",
         **ssl_params,
     )
     print(f"[DB] Connected to MySQL at {host}:{port}/{db}", flush=True)
