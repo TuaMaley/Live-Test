@@ -296,60 +296,252 @@ def _build_case_narrative(entity, typology, score, priority, txn):
 
 def _ingest_dataset():
     """
-    Load all app state from MySQL database if DATABASE_URL is set,
-    otherwise fall back to JSON cache / Excel file for local development.
+    Load all app state. Priority order:
+    1. Bank API (BANK_API_URL set) — pulls live data from bank
+    2. File-based fallback (local development)
     """
     import os as _os
 
-    # ── DB path: Railway / production ────────────────────────────────────────
-    db_url = _os.environ.get("DATABASE_URL", "")
-    db_host = _os.environ.get("MYSQLHOST", _os.environ.get("DB_HOST", ""))
+    bank_url = _os.environ.get("BANK_API_URL", "")
 
-    if db_url or db_host:
-        _ingest_from_db()
+    if bank_url:
+        _ingest_from_db()   # _ingest_from_db now calls the Bank API
     else:
         _ingest_from_files()
 
 
 def _ingest_from_db():
-    """Load all state from MySQL database."""
-    print("[DataStore] Loading from MySQL database...", flush=True)
-    try:
-        import db as _db
+    """
+    Pull all data from the Bank API.
+    This is the correct architecture — AML platform calls the bank's API,
+    not the bank's database directly.
+    """
+    import os as _os, urllib.request as _ur, json as _js, ssl as _ssl
 
-        # Create schema if first run
-        _db.create_schema()
+    bank_url = _os.environ.get("BANK_API_URL", "").rstrip("/")
+    api_key  = _os.environ.get("BANK_API_KEY", "bank-api-key-2024")
 
-        # Seed data on first deployment
-        if not _db.is_seeded():
-            print("[DataStore] First run — seeding database from dataset...", flush=True)
-            _load_raw_transactions()  # populates RAW_TRANSACTIONS
-            _db.seed_transactions(RAW_TRANSACTIONS)
-            # Run file-based ingest to build alert/case objects
-            _ingest_from_files()
-            _db.seed_alerts(ALERTS)
-            _db.seed_cases(CASES)
-            _db.seed_default_users()
-            print(f"[DataStore] Database seeded: {len(ALERTS)} alerts, {len(CASES)} cases", flush=True)
-        else:
-            # Load from DB
-            alerts_data = _db.load_alerts()
-            cases_data  = _db.load_cases()
-            txns_data   = _db.load_transactions()
-
-            INGESTED_TRANSACTIONS[:] = txns_data
-            ALERTS[:0]  = alerts_data
-            CASES[:0]   = cases_data
-            RAW_TRANSACTIONS[:] = txns_data
-
-            susp = sum(1 for a in alerts_data if a.get("priority") in ("critical","high"))
-            print(f"[DataStore] Loaded from DB: {len(ALERTS)} alerts, {susp} critical/high, {len(CASES)} cases", flush=True)
-
-    except Exception as _e:
-        import traceback
-        print(f"[DataStore] DB error: {_e} — falling back to files", flush=True)
-        traceback.print_exc()
+    if not bank_url:
+        print("[DataStore] No BANK_API_URL set — falling back to files", flush=True)
         _ingest_from_files()
+        return
+
+    print(f"[DataStore] Connecting to Bank API: {bank_url}", flush=True)
+
+    def _get(path, timeout=15):
+        """Call the Bank API and return parsed JSON."""
+        url = f"{bank_url}{path}"
+        req = _ur.Request(url, headers={
+            "X-Api-Key": api_key,
+            "Content-Type": "application/json",
+        })
+        ctx = _ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = _ssl.CERT_NONE
+        try:
+            with _ur.urlopen(req, timeout=timeout, context=ctx) as resp:
+                return _js.loads(resp.read())
+        except Exception as e:
+            print(f"[DataStore] Bank API error ({path}): {e}", flush=True)
+            return None
+
+    # ── Step 1: Health check ─────────────────────────────────────────────────
+    health = _get("/health")
+    if not health or health.get("status") != "ok":
+        print("[DataStore] Bank API unreachable — falling back to files", flush=True)
+        _ingest_from_files()
+        return
+
+    print(f"[DataStore] Bank API connected — {health.get('transactions',0)} transactions, "
+          f"{health.get('customers',0)} customers", flush=True)
+
+    # ── Step 2: Pull transactions ─────────────────────────────────────────────
+    txn_resp = _get("/transactions?limit=1000")
+    raw_txns = (txn_resp or {}).get("transactions", [])
+    print(f"[DataStore] Pulled {len(raw_txns)} transactions from bank", flush=True)
+
+    # ── Step 3: Pull customers (KYC) ─────────────────────────────────────────
+    cust_resp = _get("/customers?limit=500")
+    customers = (cust_resp or {}).get("customers", [])
+    print(f"[DataStore] Pulled {len(customers)} customers from bank", flush=True)
+
+    # ── Step 4: Pull bank alerts ──────────────────────────────────────────────
+    alert_resp = _get("/bank-alerts?limit=500")
+    bank_alerts = (alert_resp or {}).get("alerts", [])
+    print(f"[DataStore] Pulled {len(bank_alerts)} bank alerts", flush=True)
+
+    # ── Step 5: Build customer KYC lookup ────────────────────────────────────
+    kyc_map = {}
+    for c in customers:
+        cid = c.get("customer_id","")
+        if cid:
+            kyc_map[cid] = c
+
+    # ── Step 6: Enrich transactions with KYC data ────────────────────────────
+    enriched_txns = []
+    for t in raw_txns:
+        cid = t.get("sender_cust_id","")
+        kyc = kyc_map.get(cid, {})
+        enriched = {**t}
+        # Map bank fields to AML-TMS fields
+        enriched["entity_name"]     = t.get("entity_name") or kyc.get("full_name","Unknown")
+        enriched["kyc_level"]       = t.get("kyc_level") or kyc.get("kyc_level","Standard")
+        enriched["tier"]            = t.get("tier") or kyc.get("risk_tier","Low")
+        enriched["customer_segment"]= t.get("customer_segment") or kyc.get("customer_segment","Retail")
+        enriched["is_pep"]          = kyc.get("is_pep", 0)
+        enriched["is_suspicious"]   = t.get("is_flagged", 0)
+        enriched["typology_label"]  = t.get("typology_label") or _infer_typology(t)
+        enriched["source_alert_id"] = t.get("aml_alert_id") or t.get("source_alert_id","")
+        enriched["source_alert_score"] = t.get("risk_score") or t.get("source_alert_score", 0)
+        enriched["analyst_decision"]= t.get("flag_reason","")
+        enriched["sar_filed"]       = 0
+        enriched["ml_score"]        = int(t.get("risk_score") or 0)
+        enriched["ml_priority"]     = _priority(enriched["ml_score"])
+        enriched["ml_typology"]     = enriched["typology_label"]
+        enriched_txns.append(enriched)
+
+    # Store all enriched transactions
+    RAW_TRANSACTIONS[:] = enriched_txns
+    INGESTED_TRANSACTIONS[:] = enriched_txns
+
+    # ── Step 7: Build alerts from flagged transactions ───────────────────────
+    import random as _rnd
+    _rnd.seed(42)
+    officers = ["J. Mensah","A. Owusu","B. Asante","K. Boateng"]
+
+    alerts_by_id = {}
+    cases_by_id  = {}
+
+    for t in enriched_txns:
+        if not t.get("is_suspicious") and int(t.get("is_flagged",0)) == 0:
+            continue
+
+        alert_id = str(t.get("source_alert_id","")).strip()
+        if not alert_id or not alert_id.startswith("ALT-"):
+            # Generate one from transaction ID
+            txn_id_short = str(t.get("transaction_id","TXN"))[-6:]
+            alert_id = f"ALT-B{txn_id_short}"
+
+        score    = int(float(t.get("risk_score") or t.get("source_alert_score") or 60))
+        typology = t.get("typology_label") or _infer_typology(t)
+        entity   = t.get("entity_name","Unknown")
+        channel  = t.get("channel","Wire Transfer")
+        amount   = float(t.get("amount",0) or 0)
+        ts       = t.get("timestamp","")
+        priority = _priority(score)
+        status   = "open"
+
+        if alert_id not in alerts_by_id:
+            alerts_by_id[alert_id] = {
+                "id": alert_id, "entity": entity, "amount": amount,
+                "score": score, "priority": priority, "typology": typology,
+                "channel": channel, "timestamp": ts, "status": status,
+                "officer": _rnd.choice(officers), "case_id": None,
+                "txn_id": t.get("transaction_id",""),
+                "source": "bank_api",
+                "sender_bank":     t.get("sender_bank",""),
+                "sender_country":  t.get("sender_country",""),
+                "bene_name":       t.get("bene_name",""),
+                "bene_bank":       t.get("bene_bank",""),
+                "bene_country":    t.get("bene_country",""),
+                "bene_risk_score": float(t.get("bene_risk_score",0) or 0),
+                "bene_blacklist":  int(t.get("bene_blacklist",0) or 0),
+                "kyc_level":       t.get("kyc_level",""),
+                "jurisdiction":    t.get("jurisdiction",""),
+                "payment_rail":    t.get("payment_rail",""),
+                "cross_border":    int(t.get("cross_border",0) or 0),
+                "velocity_3d":     float(t.get("velocity_3d",0) or 0),
+                "behavioral_drift":float(t.get("behavioral_drift",0) or 0),
+                "geo_location":    t.get("geo_location",""),
+                "model_scores": {"iso":max(0,score-15),"xgb":min(100,score+5),
+                                 "gnn":max(0,score-8), "lstm":max(0,score-12)},
+                "shap": [
+                    {"label":"Transaction amount",  "shap":round(amount/500000,3)},
+                    {"label":"Bank risk score",     "shap":round(score/200,3)},
+                    {"label":"Cross-border flag",   "shap":round(int(t.get("cross_border",0))*0.15,3)},
+                    {"label":"Velocity 3D",         "shap":round(float(t.get("velocity_3d",0))/800,3)},
+                    {"label":"Behavioural drift",   "shap":round(float(t.get("behavioral_drift",0))*0.35,3)},
+                ],
+                "notes": t.get("flag_reason",""),
+            }
+
+    # ── Step 8: Also add bank_alerts as additional alerts ───────────────────
+    for ba in bank_alerts:
+        aid = ba.get("alert_id","")
+        if not aid or aid in alerts_by_id:
+            continue
+        score = int(ba.get("risk_score",60))
+        alerts_by_id[aid] = {
+            "id": aid,
+            "entity":   ba.get("full_name","Unknown"),
+            "amount":   float(ba.get("amount",0) or 0),
+            "score":    score,
+            "priority": _priority(score),
+            "typology": ba.get("alert_type","Suspicious Activity").replace("_"," ").title(),
+            "channel":  ba.get("channel","Wire Transfer"),
+            "timestamp":str(ba.get("txn_time") or ba.get("created_at","")),
+            "status":   ba.get("status","open"),
+            "officer":  _rnd.choice(officers),
+            "case_id":  None,
+            "txn_id":   ba.get("transaction_id",""),
+            "source":   "bank_alert",
+            "notes":    ba.get("alert_reason",""),
+            "sender_bank":"","sender_country":"","bene_name":"",
+            "bene_bank":"","bene_country":"","bene_risk_score":0,
+            "bene_blacklist":0,"kyc_level":ba.get("kyc_level",""),
+            "jurisdiction":"","payment_rail":"","cross_border":0,
+            "velocity_3d":0,"behavioral_drift":0,"geo_location":"",
+            "model_scores":{"iso":max(0,score-15),"xgb":min(100,score+5),
+                            "gnn":max(0,score-8),"lstm":max(0,score-12)},
+            "shap":[],
+        }
+
+    # ── Step 9: Group alerts into cases ──────────────────────────────────────
+    entities_seen = {}
+    for alert in alerts_by_id.values():
+        ent = alert["entity"]
+        if ent not in entities_seen:
+            entities_seen[ent] = []
+        entities_seen[ent].append(alert["id"])
+
+    case_num = 500
+    for ent, alert_ids in entities_seen.items():
+        if len(alert_ids) == 0:
+            continue
+        case_id  = f"CAS-{case_num}"
+        case_num += 1
+        top_score= max(alerts_by_id[aid]["score"] for aid in alert_ids)
+        priority = _priority(top_score)
+        typology = alerts_by_id[alert_ids[0]]["typology"]
+        for aid in alert_ids:
+            alerts_by_id[aid]["case_id"] = case_id
+        cases_by_id[case_id] = {
+            "id":          case_id,
+            "entity":      ent,
+            "alerts":      alert_ids,
+            "alert_count": len(alert_ids),
+            "priority":    priority,
+            "status":      "open",
+            "officer":     _rnd.choice(officers),
+            "opened":      alerts_by_id[alert_ids[0]]["timestamp"],
+            "sar_due":     _ts(days_ago=-29 if priority=="critical" else -25),
+            "typology":    typology,
+            "narrative":   f"Case for {ent} — {len(alert_ids)} alert(s) detected via Bank API.",
+            "sar_status":  "pending" if priority in ("critical","high") else None,
+        }
+
+    new_alerts = sorted(alerts_by_id.values(), key=lambda a: a["id"])
+    new_cases  = sorted(cases_by_id.values(),  key=lambda c: c["id"])
+
+    ALERTS[:0]    = new_alerts
+    CASES[:0]     = new_cases
+    AUDIT_LOG[:0] = [{"ts":a["timestamp"],"user":"bank_api","action":"ALERT_RECEIVED",
+                      "target":a["id"],"detail":f"Score {a['score']} — {a['typology']}"}
+                     for a in new_alerts]
+
+    susp = sum(1 for a in new_alerts if a["priority"] in ("critical","high"))
+    print(f"[DataStore] Bank API ingestion complete: {len(new_alerts)} alerts, "
+          f"{susp} critical/high, {len(new_cases)} cases", flush=True)
 
 
 def _ingest_from_files():
