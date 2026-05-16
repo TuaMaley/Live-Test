@@ -2823,7 +2823,72 @@ function startLiveFeed() {
   if(!feed) return;
 
   var _lastSyntheticTime = 0;
-  var _SYNTHETIC_INTERVAL = 30000; // synthetic transactions drop every 30 seconds
+  var _SYNTHETIC_INTERVAL = 15000; // synthetic transactions drop every 15 seconds
+
+  // ── Dashboard card auto-update ───────────────────────────────────────────
+  // Keeps Total Alerts and Today's Alerts in sync without page refresh
+  var _lastStatsRefresh = 0;
+  var _STATS_REFRESH_INTERVAL = 8000; // refresh stats every 8 seconds
+
+  async function refreshDashboardCards() {
+    var now = Date.now();
+    if (now - _lastStatsRefresh < _STATS_REFRESH_INTERVAL) return;
+    _lastStatsRefresh = now;
+
+    var freshStats = await api('/api/stats');
+    if (!freshStats) return;
+
+    // Total Alerts
+    var totalEl = document.getElementById('dash-total-alerts');
+    if (totalEl && freshStats.total_alerts_in_store > 0) {
+      var newTotal = freshStats.total_alerts_in_store;
+      var oldTotal = parseInt(totalEl.textContent) || 0;
+      if (newTotal !== oldTotal) {
+        totalEl.textContent = newTotal;
+        // Flash animation to show it updated
+        totalEl.style.transition = 'color 0.3s';
+        totalEl.style.color = 'var(--green)';
+        setTimeout(function(){ totalEl.style.color = ''; }, 1200);
+      }
+    }
+
+    // Total Alerts subtitle (critical · high)
+    var totalSub = document.getElementById('dash-total-sub');
+    if (totalSub && freshStats.critical_alerts !== undefined) {
+      totalSub.textContent = (freshStats.critical_alerts||0) + ' critical · ' + (freshStats.high_alerts||0) + ' high';
+    }
+
+    // Today's Alerts — also count session alerts from live feed
+    var todayEl = document.getElementById('dash-today-alerts');
+    if (todayEl) {
+      var backendToday = freshStats.today_alerts || 0;
+      var sessionAlerts = window._todayAlertCount || 0;
+      var displayToday = backendToday + sessionAlerts;
+      var oldToday = parseInt(todayEl.textContent) || 0;
+      if (displayToday !== oldToday) {
+        todayEl.textContent = displayToday;
+        todayEl.style.color = displayToday > 0 ? 'var(--red)' : 'var(--tx1)';
+        // Flash animation
+        todayEl.style.transition = 'opacity 0.3s';
+        todayEl.style.opacity = '0.4';
+        setTimeout(function(){ todayEl.style.opacity = '1'; }, 300);
+      }
+    }
+
+    // Today's Alerts subtitle
+    var todaySub = document.getElementById('dash-today-sub');
+    if (todaySub) {
+      var cnt = (freshStats.today_alerts||0) + (window._todayAlertCount||0);
+      todaySub.textContent = cnt > 0 ? cnt + ' alert(s) today' : 'No new alerts today';
+      todaySub.style.color = cnt > 0 ? 'var(--red)' : 'var(--green)';
+    }
+
+    // Alert Queue badge in nav
+    var queueBadge = document.getElementById('alert-count');
+    if (queueBadge && freshStats.open_alerts !== undefined) {
+      queueBadge.textContent = freshStats.open_alerts;
+    }
+  }
 
   async function tick() {
     const txn = await api('/api/live/transaction');
@@ -2833,8 +2898,10 @@ function startLiveFeed() {
     var now = Date.now();
 
     // Bank transactions always show immediately
-    // Synthetic transactions only show every 30 seconds
+    // Synthetic transactions only show every 15 seconds
     if (!isBankTxn && (now - _lastSyntheticTime) < _SYNTHETIC_INTERVAL) {
+      // Still refresh stats even if we skip the synthetic row
+      await refreshDashboardCards();
       return;
     }
     if (!isBankTxn) _lastSyntheticTime = now;
@@ -2842,11 +2909,28 @@ function startLiveFeed() {
     const col = sc(txn.score);
     const row = document.createElement('div');
     row.className = 'lr';
-    row.innerHTML = `<div class="lsc" style="background:${txn.score>=65?col+'22':'#E0F5EC44'};color:${col}">${txn.score}</div>${isBankTxn ? '<span style="background:rgba(30,164,100,0.15);color:#1EA064;border-radius:3px;padding:0 5px;font-size:9px;font-weight:700;margin-right:4px">BANK</span>' : ''}<span style="flex:1;font-weight:500;font-size:12px">${txn.entity}</span><span style="color:var(--tx2);font-size:11px">${txn.channel}</span><span style="font-weight:600;font-size:12px;margin-left:7px">${fmt(txn.amount)}</span>${txn.alert_id ? `<span style="font-size:10px;color:var(--red);margin-left:5px;font-family:monospace">&#9888;${txn.alert_id}</span>` : ''}`;
+    var _bankBadge = isBankTxn ? '<span style="background:rgba(30,164,100,0.15);color:#1EA064;border-radius:3px;padding:0 5px;font-size:9px;font-weight:700;margin-right:4px">BANK</span>' : '';
+    var _statusBadge = txn.alert_id
+      ? `<span style="font-size:10px;color:var(--red);margin-left:5px;font-family:monospace;font-weight:600">&#9888; ${txn.alert_id}</span>`
+      : (isBankTxn && txn.score < 55
+          ? '<span style="font-size:10px;color:#1EA064;margin-left:5px">&#10003; clean</span>'
+          : (isBankTxn && txn.is_flagged
+              ? '<span style="font-size:10px;color:#E67E22;margin-left:5px">&#9873; flagged</span>'
+              : ''));
+    row.innerHTML = `<div class="lsc" style="background:${txn.score>=65?col+'22':'#E0F5EC44'};color:${col}">${txn.score}</div>${_bankBadge}<span style="flex:1;font-weight:500;font-size:12px">${txn.entity}</span><span style="color:var(--tx2);font-size:11px">${txn.channel || ''}</span><span style="font-weight:600;font-size:12px;margin-left:7px">${fmt(txn.amount)}</span>${_statusBadge}`;
     $('txn-rate').innerHTML = `<span class="dot"></span>${(12800+Math.round(Math.random()*400)).toLocaleString()} txns/min`;
-    if (txn.alert_id) window._todayAlertCount = (window._todayAlertCount || 0) + 1;
+
+    // Track new alert from live feed
+    if (txn.alert_id) {
+      window._todayAlertCount = (window._todayAlertCount || 0) + 1;
+    }
+
     feed.prepend(row);
     while (feed.children.length > 8) feed.removeChild(feed.lastChild);
+
+    // Refresh dashboard cards on every transaction that produces an alert
+    // or every 8 seconds regardless
+    await refreshDashboardCards();
   }
 
   tick();

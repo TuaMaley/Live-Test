@@ -706,6 +706,26 @@ def ingest_single_transaction(txn: dict) -> str:
                 "ml_typology": typology_raw or _infer_typology(txn)}
     INGESTED_TRANSACTIONS.append(enriched)
 
+    # Push ALL transactions to live feed regardless of score
+    # This shows the full transaction stream in the dashboard
+    BANK_LIVE_QUEUE.append({
+        "txn_id":      txn_id,
+        "entity":      entity,
+        "channel":     channel,
+        "amount":      amount,
+        "score":       score,
+        "priority":    _priority(score),
+        "alert_id":    None,   # will be updated if alert is created
+        "timestamp":   ts,
+        "source":      "bank",
+        "typology":    typology_raw or _infer_typology(txn),
+        "sender_bank": txn.get("sender_bank", ""),
+        "bene_country":txn.get("bene_country", ""),
+        "payment_rail":txn.get("payment_rail", ""),
+        "currency":    txn.get("currency", "USD"),
+        "is_flagged":  is_flagged,
+    })
+
     # Only create alert if suspicious enough
     if score < 55 and not is_flagged:
         return None
@@ -768,22 +788,13 @@ def ingest_single_transaction(txn: dict) -> str:
 
     print(f"[DataStore] Alert {alert_id} created: {entity} score={score} {priority}", flush=True)
 
-    # Push to live feed queue so it appears in the dashboard live feed
-    live_entry = {
-        "txn_id":    txn_id,
-        "entity":    entity,
-        "channel":   channel,
-        "amount":    amount,
-        "score":     score,
-        "priority":  priority,
-        "alert_id":  alert_id,
-        "timestamp": ts,
-        "source":    "bank",
-        "typology":  typology,
-        "sender_bank":   txn.get("sender_bank", ""),
-        "bene_country":  txn.get("bene_country", ""),
-    }
-    BANK_LIVE_QUEUE.append(live_entry)
+    # Update the queued live feed entry with the alert_id now that we have it
+    # Find the entry we just added and update its alert_id
+    for entry in reversed(BANK_LIVE_QUEUE):
+        if entry.get("txn_id") == txn_id:
+            entry["alert_id"] = alert_id
+            entry["priority"] = priority
+            break
 
     return alert_id
 
