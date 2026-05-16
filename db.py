@@ -285,6 +285,56 @@ CREATE TABLE IF NOT EXISTS app_config (
     value      TEXT,
     updated_at DATETIME     DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS kyc_profiles (
+    customer_id      VARCHAR(30)  PRIMARY KEY,
+    full_name        VARCHAR(100),
+    date_of_birth    DATE,
+    nationality      VARCHAR(40),
+    country_of_res   VARCHAR(40),
+    id_type          VARCHAR(30),
+    id_number        VARCHAR(40),
+    kyc_level        VARCHAR(20)  DEFAULT 'Standard',
+    risk_tier        VARCHAR(20)  DEFAULT 'Low',
+    customer_segment VARCHAR(30),
+    is_pep           TINYINT      DEFAULT 0,
+    is_sanctioned    TINYINT      DEFAULT 0,
+    is_edd           TINYINT      DEFAULT 0,
+    edd_reason       TEXT,
+    email            VARCHAR(80),
+    phone            VARCHAR(30),
+    address          TEXT,
+    occupation       VARCHAR(60),
+    employer         VARCHAR(80),
+    annual_income    DOUBLE,
+    source_of_funds  VARCHAR(60),
+    status           VARCHAR(20)  DEFAULT 'active',
+    analyst_notes    TEXT,
+    risk_flags       JSON,
+    documents        JSON,
+    last_review_date DATETIME,
+    last_review_by   VARCHAR(60),
+    created_at       DATETIME     DEFAULT CURRENT_TIMESTAMP,
+    updated_at       DATETIME     DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_name (full_name(40)),
+    INDEX idx_tier (risk_tier),
+    INDEX idx_pep  (is_pep),
+    INDEX idx_edd  (is_edd)
+);
+
+CREATE TABLE IF NOT EXISTS kyc_documents (
+    id           BIGINT       AUTO_INCREMENT PRIMARY KEY,
+    customer_id  VARCHAR(30),
+    doc_type     VARCHAR(40),
+    doc_name     VARCHAR(100),
+    doc_ref      VARCHAR(80),
+    uploaded_by  VARCHAR(60),
+    uploaded_at  DATETIME     DEFAULT CURRENT_TIMESTAMP,
+    expiry_date  DATE,
+    status       VARCHAR(20)  DEFAULT 'verified',
+    notes        TEXT,
+    INDEX idx_customer (customer_id)
+);
 """
 
 
@@ -672,3 +722,113 @@ def is_db_available():
         return True
     except Exception:
         return False
+
+
+# ── KYC persistence ───────────────────────────────────────────────────────────
+def upsert_kyc_profile(profile: dict):
+    """Insert or update a KYC profile."""
+    try:
+        execute("""
+            INSERT INTO kyc_profiles
+                (customer_id, full_name, date_of_birth, nationality,
+                 country_of_res, id_type, id_number, kyc_level, risk_tier,
+                 customer_segment, is_pep, is_sanctioned, is_edd, edd_reason,
+                 email, phone, address, occupation, employer, annual_income,
+                 source_of_funds, status, analyst_notes, risk_flags, documents,
+                 last_review_date, last_review_by)
+            VALUES
+                (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
+                 %s,%s,%s,%s,%s,%s,%s)
+            ON DUPLICATE KEY UPDATE
+                full_name=VALUES(full_name),
+                kyc_level=VALUES(kyc_level),
+                risk_tier=VALUES(risk_tier),
+                is_pep=VALUES(is_pep),
+                is_edd=VALUES(is_edd),
+                edd_reason=VALUES(edd_reason),
+                analyst_notes=VALUES(analyst_notes),
+                risk_flags=VALUES(risk_flags),
+                documents=VALUES(documents),
+                last_review_date=VALUES(last_review_date),
+                last_review_by=VALUES(last_review_by),
+                updated_at=NOW()
+        """, (
+            profile.get('customer_id'), profile.get('full_name'),
+            profile.get('date_of_birth'), profile.get('nationality'),
+            profile.get('country_of_res'), profile.get('id_type'),
+            profile.get('id_number'), profile.get('kyc_level','Standard'),
+            profile.get('risk_tier','Low'), profile.get('customer_segment','Retail'),
+            int(profile.get('is_pep',0)), int(profile.get('is_sanctioned',0)),
+            int(profile.get('is_edd',0)), profile.get('edd_reason',''),
+            profile.get('email',''), profile.get('phone',''),
+            profile.get('address',''), profile.get('occupation',''),
+            profile.get('employer',''), profile.get('annual_income',0),
+            profile.get('source_of_funds',''), profile.get('status','active'),
+            profile.get('analyst_notes',''),
+            json.dumps(profile.get('risk_flags',[])),
+            json.dumps(profile.get('documents',[])),
+            profile.get('last_review_date'), profile.get('last_review_by'),
+        ))
+        return True
+    except Exception as e:
+        print(f"[DB] KYC upsert error: {e}", flush=True)
+        return False
+
+
+def get_kyc_profile(customer_id: str):
+    """Get a single KYC profile from DB."""
+    row = execute("SELECT * FROM kyc_profiles WHERE customer_id=%s",
+                  (customer_id,), fetch="one")
+    if not row: return None
+    d = dict(row)
+    for k,v in d.items():
+        if hasattr(v,'isoformat'): d[k]=str(v)
+    for jk in ('risk_flags','documents'):
+        if jk in d and isinstance(d[jk],str):
+            try: d[jk]=json.loads(d[jk])
+            except: d[jk]=[]
+    return d
+
+
+def load_all_kyc_profiles():
+    """Load all KYC profiles from DB."""
+    rows = execute("SELECT * FROM kyc_profiles ORDER BY full_name", fetch="all") or []
+    result = []
+    for r in rows:
+        d = dict(r)
+        for k,v in d.items():
+            if hasattr(v,'isoformat'): d[k]=str(v)
+        for jk in ('risk_flags','documents'):
+            if jk in d and isinstance(d[jk],str):
+                try: d[jk]=json.loads(d[jk])
+                except: d[jk]=[]
+        result.append(d)
+    return result
+
+
+def add_kyc_document(customer_id: str, doc: dict):
+    """Add a document record for a customer."""
+    try:
+        execute("""INSERT INTO kyc_documents
+                   (customer_id,doc_type,doc_name,doc_ref,uploaded_by,expiry_date,status,notes)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
+                (customer_id, doc.get('doc_type'), doc.get('doc_name'),
+                 doc.get('doc_ref',''), doc.get('uploaded_by','system'),
+                 doc.get('expiry_date'), doc.get('status','verified'),
+                 doc.get('notes','')))
+        return True
+    except Exception as e:
+        print(f"[DB] KYC doc error: {e}", flush=True)
+        return False
+
+
+def get_kyc_documents(customer_id: str):
+    rows = execute("SELECT * FROM kyc_documents WHERE customer_id=%s ORDER BY uploaded_at DESC",
+                   (customer_id,), fetch="all") or []
+    result = []
+    for r in rows:
+        d = dict(r)
+        for k,v in d.items():
+            if hasattr(v,'isoformat'): d[k]=str(v)
+        result.append(d)
+    return result

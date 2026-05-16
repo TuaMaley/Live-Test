@@ -282,6 +282,8 @@ input:focus,select:focus{outline:2px solid var(--mid);outline-offset:1px}
     <div class="ni" onclick="go('sar-editor')"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M3 2h8l3 3v9H3z"/><path d="M11 2v3h3"/><path d="M5 7h6M5 10h6M5 13h4"/></svg>SAR Editor</div>
     <div class="ni" onclick="go('features')"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 2h3v3H2zM6.5 2h3v3h-3zM11 2h3v3h-3zM2 6.5h3v3H2zM6.5 6.5h3v3h-3zM11 6.5h3v3h-3zM2 11h3v3H2zM6.5 11h3v3h-3z"/></svg>Feature Engineering</div>
     <div class="nav-sec">Sanctions</div>
+    <div class="nav-sec">KYC & Compliance</div>
+    <div class="ni" onclick="go('kyc')"><span class="ni-icon">&#128100;</span>KYC Registry</div>
     <div class="ni" onclick="go('sanctions')"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M8 1l5 2v5c0 3-2.5 5.5-5 7C5.5 13.5 3 11 3 8V3z"/><path d="M5.5 8l2 2 3-3"/></svg>Sanctions Screening</div>
     <div class="nav-sec">Analytics</div>
     <div class="ni" onclick="go('analytics')"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="1" y="8" width="3" height="7"/><rect x="6" y="4" width="3" height="11"/><rect x="11" y="1" width="3" height="14"/></svg>Executive Dashboard</div>
@@ -6093,6 +6095,481 @@ window._goFinal = async function(page) {
 
 // Point window.go to the unified router
 window.go = window._goFinal;
+
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// KYC REGISTRY PAGE
+// ════════════════════════════════════════════════════════════════════════════
+
+async function kyc() {
+  $('content').innerHTML = `
+    <div style="padding:24px">
+      <div style="font-size:20px;font-weight:600;margin-bottom:4px">KYC Registry</div>
+      <div style="font-size:13px;color:var(--tx2);margin-bottom:20px">Customer profiles from bank · analyst notes and risk flags stored in AML platform</div>
+      <div style="background:var(--bdr);border-radius:8px;height:300px;display:flex;align-items:center;justify-content:center;animation:pulse 1.2s infinite">
+        <span style="color:var(--tx2);font-size:13px">Loading KYC profiles...</span>
+      </div>
+    </div>`;
+
+  const data = await api('/api/kyc') || {};
+  const profiles = data.profiles || [];
+
+  const tierColor = t => t==='High'||t==='PEP'?'#E24B4A':t==='Standard'?'#BA7517':'#1EA064';
+  const kycColor  = k => k==='Enhanced'||k==='Premium'?'#1E50B4':k==='Basic'?'#8892AA':'var(--tx1)';
+  const badge = (label, color, bg) =>
+    `<span style="background:${bg};color:${color};border-radius:20px;padding:2px 9px;font-size:11px;font-weight:600">${label}</span>`;
+
+  // Summary cards
+  const total   = profiles.length;
+  const highRisk= profiles.filter(p=>p.risk_tier==='High'||p.risk_tier==='PEP').length;
+  const pep     = profiles.filter(p=>p.is_pep==1||p.is_pep===true).length;
+  const edd     = profiles.filter(p=>p.is_edd==1||p.is_edd===true).length;
+  const enhanced= profiles.filter(p=>p.kyc_level==='Enhanced'||p.kyc_level==='Premium').length;
+
+  $('content').innerHTML = `
+<div style="padding:24px">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
+    <div>
+      <div style="font-size:20px;font-weight:600">KYC Registry</div>
+      <div style="font-size:13px;color:var(--tx2);margin-top:2px">Customer profiles · ${total} records from bank</div>
+    </div>
+    <div style="display:flex;gap:8px">
+      <input id="kyc-search" placeholder="Search name, ID, country..." oninput="kycFilter()"
+        style="padding:8px 12px;border:1px solid var(--bdr);border-radius:6px;background:var(--bg2);color:var(--tx1);font-size:13px;width:220px">
+      <select id="kyc-tier-filter" onchange="kycFilter()"
+        style="padding:8px 12px;border:1px solid var(--bdr);border-radius:6px;background:var(--bg2);color:var(--tx1);font-size:13px">
+        <option value="">All Risk Tiers</option>
+        <option value="High">High Risk</option>
+        <option value="Standard">Standard</option>
+        <option value="Low">Low Risk</option>
+        <option value="PEP">PEP</option>
+      </select>
+      <select id="kyc-kyc-filter" onchange="kycFilter()"
+        style="padding:8px 12px;border:1px solid var(--bdr);border-radius:6px;background:var(--bg2);color:var(--tx1);font-size:13px">
+        <option value="">All KYC Levels</option>
+        <option value="Basic">Basic</option>
+        <option value="Standard">Standard</option>
+        <option value="Enhanced">Enhanced</option>
+        <option value="Premium">Premium</option>
+      </select>
+    </div>
+  </div>
+
+  <!-- Summary metrics -->
+  <div class="mrow" style="grid-template-columns:repeat(5,1fr);margin-bottom:20px">
+    <div class="mc"><div class="ml">Total Customers</div><div class="mv">${total}</div></div>
+    <div class="mc"><div class="ml">High Risk</div><div class="mv" style="color:var(--red)">${highRisk}</div><div class="md r">${((highRisk/Math.max(total,1))*100).toFixed(0)}% of portfolio</div></div>
+    <div class="mc"><div class="ml">PEP Flagged</div><div class="mv" style="color:var(--red)">${pep}</div><div class="md">Politically exposed</div></div>
+    <div class="mc"><div class="ml">EDD Required</div><div class="mv" style="color:#BA7517">${edd}</div><div class="md">Enhanced due diligence</div></div>
+    <div class="mc"><div class="ml">Enhanced KYC</div><div class="mv" style="color:#1E50B4">${enhanced}</div><div class="md">Enhanced / Premium</div></div>
+  </div>
+
+  <!-- Customer table -->
+  <div class="card" style="padding:0">
+    <div class="ch" style="padding:14px 18px">
+      <span class="ct">Customer Registry</span>
+      <span id="kyc-count" style="font-size:11px;color:var(--tx2);margin-left:8px">· ${total} customers</span>
+    </div>
+    <div style="overflow-x:auto">
+      <table id="kyc-table">
+        <thead><tr>
+          <th>Customer ID</th><th>Full Name</th><th>Nationality</th>
+          <th>KYC Level</th><th>Risk Tier</th><th>Segment</th>
+          <th>PEP</th><th>EDD</th><th>Alerts</th><th>Actions</th>
+        </tr></thead>
+        <tbody id="kyc-tbody">
+          ${profiles.map(p => `
+          <tr data-name="${(p.full_name||'').toLowerCase()}" data-tier="${p.risk_tier||''}" data-kyc="${p.kyc_level||''}" data-id="${(p.customer_id||'').toLowerCase()}">
+            <td style="font-family:monospace;font-size:11px">${p.customer_id||'—'}</td>
+            <td style="font-weight:600">${p.full_name||'—'}</td>
+            <td>${p.nationality||p.country_of_res||'—'}</td>
+            <td>${badge(p.kyc_level||'Standard', kycColor(p.kyc_level), 'rgba(30,80,180,0.1)')}</td>
+            <td>${badge(p.risk_tier||'Low', tierColor(p.risk_tier), `${tierColor(p.risk_tier)}22`)}</td>
+            <td style="font-size:12px">${p.customer_segment||'—'}</td>
+            <td style="text-align:center">${(p.is_pep==1||p.is_pep===true)?'<span style="color:#E24B4A;font-weight:700">&#9888; PEP</span>':'<span style="color:var(--tx2)">—</span>'}</td>
+            <td style="text-align:center">${(p.is_edd==1||p.is_edd===true)?'<span style="color:#BA7517;font-weight:700">EDD</span>':'<span style="color:var(--tx2)">—</span>'}</td>
+            <td style="text-align:center">${p.alert_count>0?`<span style="color:var(--red);font-weight:700">${p.alert_count}</span>`:'<span style="color:var(--tx2)">0</span>'}</td>
+            <td><button onclick="openKycProfile('${p.customer_id}')"
+              style="background:#1E50B4;color:#fff;border:none;border-radius:5px;padding:5px 12px;font-size:12px;cursor:pointer">
+              View Profile</button></td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>`;
+
+  window._kycProfiles = profiles;
+}
+
+function kycFilter() {
+  var search = ($('kyc-search')||{}).value||'';
+  var tier   = ($('kyc-tier-filter')||{}).value||'';
+  var kyc    = ($('kyc-kyc-filter')||{}).value||'';
+  var rows   = document.querySelectorAll('#kyc-tbody tr');
+  var shown  = 0;
+  rows.forEach(function(r){
+    var name  = r.getAttribute('data-name')||'';
+    var rtier = r.getAttribute('data-tier')||'';
+    var rkyc  = r.getAttribute('data-kyc')||'';
+    var rid   = r.getAttribute('data-id')||'';
+    var match = (!search || name.includes(search.toLowerCase()) || rid.includes(search.toLowerCase()))
+             && (!tier || rtier===tier)
+             && (!kyc  || rkyc===kyc);
+    r.style.display = match ? '' : 'none';
+    if (match) shown++;
+  });
+  var cnt = document.getElementById('kyc-count');
+  if (cnt) cnt.textContent = `· ${shown} customer${shown!==1?'s':''}`;
+}
+
+// ── KYC Profile Detail + Edit ─────────────────────────────────────────────────
+async function openKycProfile(customerId) {
+  $('content').innerHTML = `<div style="padding:40px;text-align:center"><div class="spinner"></div><div style="margin-top:12px;color:var(--tx2)">Loading profile...</div></div>`;
+
+  const p = await api('/api/kyc/' + customerId) || {};
+  if (!p.customer_id && !p.full_name) {
+    $('content').innerHTML = '<div style="padding:40px;color:var(--tx2)">Profile not found.</div>'; return;
+  }
+
+  const tierColor = t => t==='High'||t==='PEP'?'#E24B4A':t==='Standard'?'#BA7517':'#1EA064';
+  const riskTiers   = ['Low','Standard','High','PEP'];
+  const kycLevels   = ['Basic','Standard','Enhanced','Premium'];
+  const docTypes    = ['Passport','National ID','Driver Licence','Utility Bill','Bank Statement','Company Registration','Other'];
+  const alerts      = p.linked_alerts || [];
+  const docs        = p.aml_documents || [];
+  const riskFlags   = Array.isArray(p.risk_flags) ? p.risk_flags : [];
+
+  $('content').innerHTML = `
+<div style="padding:24px">
+  <!-- Header -->
+  <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px">
+    <button onclick="go('kyc')" style="background:none;border:1px solid var(--bdr);border-radius:6px;padding:6px 12px;color:var(--tx1);cursor:pointer;font-size:13px">← Back</button>
+    <div>
+      <div style="font-size:20px;font-weight:700">${p.full_name||'Unknown'}</div>
+      <div style="font-size:12px;color:var(--tx2)">${p.customer_id} · ${p.customer_segment||''} · ${p.nationality||''}</div>
+    </div>
+    <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
+      ${p.is_pep?'<span style="background:#E24B4A22;color:#E24B4A;border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700">⚠ PEP</span>':''}
+      ${p.is_edd?'<span style="background:#BA751722;color:#BA7517;border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700">EDD Required</span>':''}
+      ${p.is_sanctioned?'<span style="background:#E24B4A22;color:#E24B4A;border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700">⛔ SANCTIONED</span>':''}
+      <span style="background:${tierColor(p.risk_tier)}22;color:${tierColor(p.risk_tier)};border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700">${p.risk_tier||'Low'} Risk</span>
+    </div>
+  </div>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+
+    <!-- Left: Identity + Edit -->
+    <div>
+      <div class="card" style="margin-bottom:14px">
+        <div class="ch"><span class="ct">Identity & KYC</span></div>
+        <div class="cb">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;font-size:13px">
+            <div><div style="color:var(--tx2);font-size:11px">Full Name</div><div style="font-weight:500">${p.full_name||'—'}</div></div>
+            <div><div style="color:var(--tx2);font-size:11px">Date of Birth</div><div>${p.date_of_birth||'—'}</div></div>
+            <div><div style="color:var(--tx2);font-size:11px">Nationality</div><div>${p.nationality||'—'}</div></div>
+            <div><div style="color:var(--tx2);font-size:11px">Country of Residence</div><div>${p.country_of_res||'—'}</div></div>
+            <div><div style="color:var(--tx2);font-size:11px">ID Type</div><div>${p.id_type||'—'}</div></div>
+            <div><div style="color:var(--tx2);font-size:11px">ID Number</div><div style="font-family:monospace">${p.id_number||'—'}</div></div>
+            <div><div style="color:var(--tx2);font-size:11px">Email</div><div>${p.email||'—'}</div></div>
+            <div><div style="color:var(--tx2);font-size:11px">Phone</div><div>${p.phone||'—'}</div></div>
+            <div style="grid-column:span 2"><div style="color:var(--tx2);font-size:11px">Address</div><div>${p.address||'—'}</div></div>
+            <div><div style="color:var(--tx2);font-size:11px">Occupation</div><div>${p.occupation||'—'}</div></div>
+            <div><div style="color:var(--tx2);font-size:11px">Employer</div><div>${p.employer||'—'}</div></div>
+            <div><div style="color:var(--tx2);font-size:11px">Annual Income</div><div>${p.annual_income?'$'+Number(p.annual_income).toLocaleString():'—'}</div></div>
+            <div><div style="color:var(--tx2);font-size:11px">Source of Funds</div><div>${p.source_of_funds||'—'}</div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Account Info -->
+      ${(p.accounts||[]).length > 0 ? `
+      <div class="card" style="margin-bottom:14px">
+        <div class="ch"><span class="ct">Accounts (${(p.accounts||[]).length})</span></div>
+        <div class="cb" style="padding:0">
+          <table>
+            <thead><tr><th>Account</th><th>Type</th><th>Currency</th><th>Balance</th><th>Status</th></tr></thead>
+            <tbody>${(p.accounts||[]).map(a=>`
+              <tr>
+                <td style="font-family:monospace;font-size:11px">${a.account_id}</td>
+                <td>${a.account_type||'—'}</td>
+                <td>${a.currency||'USD'}</td>
+                <td style="font-weight:600">$${Number(a.balance||0).toLocaleString()}</td>
+                <td><span style="color:${a.status==='active'?'#1EA064':'#E24B4A'}">${a.status||'—'}</span></td>
+              </tr>`).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>` : ''}
+    </div>
+
+    <!-- Right: AML Edit Panel -->
+    <div>
+      <!-- Risk Assessment Edit -->
+      <div class="card" style="margin-bottom:14px;border:1px solid rgba(30,80,180,0.2)">
+        <div class="ch"><span class="ct">AML Risk Assessment</span><span style="font-size:11px;color:var(--tx2);margin-left:8px">· editable by analyst</span></div>
+        <div class="cb">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">
+            <div>
+              <div style="font-size:12px;color:var(--tx2);margin-bottom:4px">Risk Tier</div>
+              <select id="kyc-edit-tier" style="width:100%;padding:7px;border:1px solid var(--bdr);border-radius:5px;background:var(--bg2);color:var(--tx1);font-size:13px">
+                ${riskTiers.map(t=>`<option value="${t}" ${(p.risk_tier||'Low')===t?'selected':''}>${t}</option>`).join('')}
+              </select>
+            </div>
+            <div>
+              <div style="font-size:12px;color:var(--tx2);margin-bottom:4px">KYC Level</div>
+              <select id="kyc-edit-level" style="width:100%;padding:7px;border:1px solid var(--bdr);border-radius:5px;background:var(--bg2);color:var(--tx1);font-size:13px">
+                ${kycLevels.map(k=>`<option value="${k}" ${(p.kyc_level||'Standard')===k?'selected':''}>${k}</option>`).join('')}
+              </select>
+            </div>
+          </div>
+          <div style="display:flex;gap:16px;margin-bottom:14px">
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px">
+              <input type="checkbox" id="kyc-edit-pep" ${p.is_pep?'checked':''}>
+              <span>PEP Flag</span>
+            </label>
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px">
+              <input type="checkbox" id="kyc-edit-edd" ${p.is_edd?'checked':''} onchange="toggleEddReason()">
+              <span>Require EDD</span>
+            </label>
+          </div>
+          <div id="edd-reason-row" style="margin-bottom:14px;${!p.is_edd?'display:none':''}">
+            <div style="font-size:12px;color:var(--tx2);margin-bottom:4px">EDD Reason</div>
+            <input id="kyc-edit-edd-reason" value="${p.edd_reason||''}" placeholder="Reason for Enhanced Due Diligence..."
+              style="width:100%;padding:7px;border:1px solid var(--bdr);border-radius:5px;background:var(--bg2);color:var(--tx1);font-size:13px;box-sizing:border-box">
+          </div>
+          <div style="margin-bottom:14px">
+            <div style="font-size:12px;color:var(--tx2);margin-bottom:4px">Analyst Notes</div>
+            <textarea id="kyc-edit-notes" rows="4" placeholder="Add investigation notes, observations, concerns..."
+              style="width:100%;padding:7px;border:1px solid var(--bdr);border-radius:5px;background:var(--bg2);color:var(--tx1);font-size:13px;resize:vertical;box-sizing:border-box">${p.analyst_notes||''}</textarea>
+          </div>
+          <div style="margin-bottom:14px">
+            <div style="font-size:12px;color:var(--tx2);margin-bottom:6px">Risk Flags</div>
+            <div id="kyc-flags-list" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px">
+              ${riskFlags.map((f,i)=>`<span style="background:rgba(226,75,74,0.12);color:#E24B4A;border-radius:20px;padding:3px 10px;font-size:12px;display:flex;align-items:center;gap:4px">
+                ${f}<button onclick="removeKycFlag(${i})" style="background:none;border:none;color:#E24B4A;cursor:pointer;padding:0;font-size:14px;line-height:1">×</button>
+              </span>`).join('')}
+            </div>
+            <div style="display:flex;gap:8px">
+              <input id="kyc-flag-input" placeholder="Add risk flag (e.g. Structuring Pattern)..."
+                style="flex:1;padding:6px;border:1px solid var(--bdr);border-radius:5px;background:var(--bg2);color:var(--tx1);font-size:12px"
+                onkeydown="if(event.key==='Enter'){addKycFlag('${customerId}')}">
+              <button onclick="addKycFlag('${customerId}')"
+                style="background:rgba(226,75,74,0.1);color:#E24B4A;border:1px solid rgba(226,75,74,0.2);border-radius:5px;padding:6px 12px;font-size:12px;cursor:pointer">+ Add Flag</button>
+            </div>
+          </div>
+          <button onclick="saveKycProfile('${customerId}')"
+            style="background:#1E50B4;color:#fff;border:none;border-radius:6px;padding:9px 20px;font-size:13px;font-weight:600;cursor:pointer;width:100%">
+            &#10003; Save Risk Assessment
+          </button>
+          ${p.last_review_by?`<div style="font-size:11px;color:var(--tx2);text-align:center;margin-top:8px">Last reviewed by ${p.last_review_by} on ${(p.last_review_date||'').split('T')[0]}</div>`:''}
+        </div>
+      </div>
+
+      <!-- Documents -->
+      <div class="card" style="margin-bottom:14px">
+        <div class="ch"><span class="ct">Documents (${docs.length})</span></div>
+        <div class="cb" style="padding:0">
+          ${docs.length>0?`<table style="margin-bottom:0">
+            <thead><tr><th>Type</th><th>Name</th><th>Status</th><th>Uploaded</th><th>Expiry</th></tr></thead>
+            <tbody>${docs.map(d=>`<tr>
+              <td style="font-size:12px">${d.doc_type||'—'}</td>
+              <td style="font-weight:500;font-size:12px">${d.doc_name||'—'}</td>
+              <td><span style="color:${d.status==='verified'?'#1EA064':'#BA7517'};font-size:11px;font-weight:600">${d.status||'—'}</span></td>
+              <td style="font-size:11px;color:var(--tx2)">${(d.uploaded_at||'').split('T')[0]||'—'}</td>
+              <td style="font-size:11px;color:${d.expiry_date&&new Date(d.expiry_date)<new Date()?'#E24B4A':'var(--tx2)'}">${d.expiry_date||'—'}</td>
+            </tr>`).join('')}</tbody>
+          </table>`:'<div style="padding:14px;color:var(--tx2);font-size:13px;text-align:center">No documents on file</div>'}
+          <div style="padding:14px;border-top:1px solid var(--bdr)">
+            <div style="font-size:12px;color:var(--tx2);margin-bottom:8px;font-weight:600">Add Document Record</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+              <select id="doc-type" style="padding:6px;border:1px solid var(--bdr);border-radius:5px;background:var(--bg2);color:var(--tx1);font-size:12px">
+                ${docTypes.map(d=>`<option>${d}</option>`).join('')}
+              </select>
+              <input id="doc-name" placeholder="Document name / reference..."
+                style="padding:6px;border:1px solid var(--bdr);border-radius:5px;background:var(--bg2);color:var(--tx1);font-size:12px">
+              <input id="doc-expiry" type="date" placeholder="Expiry date"
+                style="padding:6px;border:1px solid var(--bdr);border-radius:5px;background:var(--bg2);color:var(--tx1);font-size:12px">
+              <select id="doc-status" style="padding:6px;border:1px solid var(--bdr);border-radius:5px;background:var(--bg2);color:var(--tx1);font-size:12px">
+                <option value="verified">Verified</option>
+                <option value="pending">Pending</option>
+                <option value="expired">Expired</option>
+                <option value="rejected">Rejected</option>
+              </select>
+            </div>
+            <button onclick="addKycDocument('${customerId}')"
+              style="background:rgba(30,80,180,0.1);color:#1E50B4;border:1px solid rgba(30,80,180,0.2);border-radius:5px;padding:7px 14px;font-size:12px;cursor:pointer;font-weight:600">
+              + Add Document Record
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Linked Alerts -->
+  ${alerts.length>0?`
+  <div class="card" style="margin-top:4px">
+    <div class="ch"><span class="ct">Linked Alerts (${alerts.length})</span>
+      <span style="font-size:11px;color:var(--tx2);margin-left:8px">· alerts associated with this customer</span>
+    </div>
+    <div class="cb" style="padding:0">
+      <table>
+        <thead><tr><th>Alert ID</th><th>Score</th><th>Typology</th><th>Amount</th><th>Priority</th><th>Status</th><th></th></tr></thead>
+        <tbody>${alerts.map(a=>`<tr>
+          <td style="font-family:monospace;font-size:11px">${a.id}</td>
+          <td style="font-weight:700;color:${a.score>=85?'#E24B4A':a.score>=70?'#BA7517':'var(--tx1)'}">${a.score}</td>
+          <td style="font-size:12px">${a.typology||'—'}</td>
+          <td style="font-weight:500">$${Number(a.amount||0).toLocaleString()}</td>
+          <td>${a.priority||'—'}</td>
+          <td>${a.status||'—'}</td>
+          <td><button onclick="openAlertDetail('${a.id}')" style="background:#1E50B4;color:#fff;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer">View</button></td>
+        </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>
+  </div>` : ''}
+</div>`;
+
+  window._kycCurrentProfile = p;
+  window._kycCurrentFlags   = [...riskFlags];
+}
+
+function toggleEddReason() {
+  var cb  = document.getElementById('kyc-edit-edd');
+  var row = document.getElementById('edd-reason-row');
+  if (row) row.style.display = cb && cb.checked ? '' : 'none';
+}
+
+function addKycFlag(customerId) {
+  var inp = document.getElementById('kyc-flag-input');
+  if (!inp || !inp.value.trim()) return;
+  window._kycCurrentFlags = window._kycCurrentFlags || [];
+  window._kycCurrentFlags.push(inp.value.trim());
+  inp.value = '';
+  // Re-render flags list
+  var list = document.getElementById('kyc-flags-list');
+  if (list) list.innerHTML = window._kycCurrentFlags.map((f,i)=>
+    `<span style="background:rgba(226,75,74,0.12);color:#E24B4A;border-radius:20px;padding:3px 10px;font-size:12px;display:flex;align-items:center;gap:4px">
+      ${f}<button onclick="removeKycFlag(${i})" style="background:none;border:none;color:#E24B4A;cursor:pointer;padding:0;font-size:14px">×</button>
+    </span>`).join('');
+}
+
+function removeKycFlag(idx) {
+  window._kycCurrentFlags = (window._kycCurrentFlags||[]).filter((_,i)=>i!==idx);
+  var list = document.getElementById('kyc-flags-list');
+  if (list) list.innerHTML = (window._kycCurrentFlags||[]).map((f,i)=>
+    `<span style="background:rgba(226,75,74,0.12);color:#E24B4A;border-radius:20px;padding:3px 10px;font-size:12px;display:flex;align-items:center;gap:4px">
+      ${f}<button onclick="removeKycFlag(${i})" style="background:none;border:none;color:#E24B4A;cursor:pointer;padding:0;font-size:14px">×</button>
+    </span>`).join('');
+}
+
+async function saveKycProfile(customerId) {
+  var tier    = (document.getElementById('kyc-edit-tier')||{}).value||'Low';
+  var level   = (document.getElementById('kyc-edit-level')||{}).value||'Standard';
+  var pep     = (document.getElementById('kyc-edit-pep')||{}).checked ? 1 : 0;
+  var edd     = (document.getElementById('kyc-edit-edd')||{}).checked ? 1 : 0;
+  var eddR    = (document.getElementById('kyc-edit-edd-reason')||{}).value||'';
+  var notes   = (document.getElementById('kyc-edit-notes')||{}).value||'';
+  var flags   = window._kycCurrentFlags || [];
+  var officer = window._currentUser || 'Analyst';
+
+  var payload = {
+    customer_id: customerId,
+    risk_tier:   tier,
+    kyc_level:   level,
+    is_pep:      pep,
+    is_edd:      edd,
+    edd_reason:  eddR,
+    analyst_notes: notes,
+    risk_flags:  flags,
+    officer:     officer,
+  };
+
+  var btn = document.querySelector('button[onclick*="saveKycProfile"]');
+  if (btn) { btn.textContent = 'Saving...'; btn.disabled = true; }
+
+  const res = await api('/api/kyc/save', {method:'POST', body: JSON.stringify(payload)});
+
+  if (res && res.ok) {
+    if (btn) { btn.textContent = '✓ Saved'; btn.style.background='#1EA064'; }
+    setTimeout(()=>{ if(btn){btn.textContent='✓ Save Risk Assessment';btn.disabled=false;btn.style.background='#1E50B4';} }, 2000);
+  } else {
+    if (btn) { btn.textContent = '✗ Save failed — try again'; btn.disabled=false; btn.style.background='#E24B4A'; }
+    setTimeout(()=>{ if(btn){btn.textContent='✓ Save Risk Assessment';btn.style.background='#1E50B4';} }, 3000);
+  }
+}
+
+async function addKycDocument(customerId) {
+  var docType   = (document.getElementById('doc-type')||{}).value||'Other';
+  var docName   = (document.getElementById('doc-name')||{}).value||'';
+  var docExpiry = (document.getElementById('doc-expiry')||{}).value||'';
+  var docStatus = (document.getElementById('doc-status')||{}).value||'verified';
+
+  if (!docName.trim()) { alert('Please enter a document name.'); return; }
+
+  const res = await api('/api/kyc/document', {method:'POST', body: JSON.stringify({
+    customer_id: customerId,
+    doc_type:    docType,
+    doc_name:    docName,
+    expiry_date: docExpiry||null,
+    status:      docStatus,
+    officer:     window._currentUser||'Analyst',
+  })});
+
+  if (res && res.ok) {
+    // Refresh the profile
+    openKycProfile(customerId);
+  } else {
+    alert('Failed to add document.');
+  }
+}
+
+// ── Embedded KYC mini-panel (for Case Management / Alert Detail) ──────────────
+async function renderKycMiniPanel(customerId, entityName, containerId) {
+  var container = document.getElementById(containerId);
+  if (!container) return;
+
+  container.innerHTML = '<div style="padding:12px;color:var(--tx2);font-size:12px">Loading KYC...</div>';
+
+  const p = await api('/api/kyc/' + customerId) || {};
+  if (!p.customer_id && !p.full_name) {
+    // Try to find by entity name from alerts
+    container.innerHTML = `<div style="padding:12px;font-size:12px;color:var(--tx2)">No KYC profile found for ${entityName||customerId}</div>`;
+    return;
+  }
+
+  const tierColor = t => t==='High'||t==='PEP'?'#E24B4A':t==='Standard'?'#BA7517':'#1EA064';
+  container.innerHTML = `
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;font-size:12px;margin-bottom:12px">
+      <div><div style="color:var(--tx2);font-size:10px;text-transform:uppercase">KYC Level</div>
+           <div style="font-weight:600;color:#1E50B4">${p.kyc_level||'Standard'}</div></div>
+      <div><div style="color:var(--tx2);font-size:10px;text-transform:uppercase">Risk Tier</div>
+           <div style="font-weight:600;color:${tierColor(p.risk_tier)}">${p.risk_tier||'Low'}</div></div>
+      <div><div style="color:var(--tx2);font-size:10px;text-transform:uppercase">PEP</div>
+           <div style="font-weight:600;color:${p.is_pep?'#E24B4A':'#1EA064'}">${p.is_pep?'YES — PEP':'No'}</div></div>
+      <div><div style="color:var(--tx2);font-size:10px;text-transform:uppercase">EDD</div>
+           <div style="font-weight:600;color:${p.is_edd?'#BA7517':'#1EA064'}">${p.is_edd?'Required':'Not required'}</div></div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;font-size:12px;margin-bottom:12px">
+      <div><div style="color:var(--tx2);font-size:10px">Nationality</div><div>${p.nationality||'—'}</div></div>
+      <div><div style="color:var(--tx2);font-size:10px">Source of Funds</div><div>${p.source_of_funds||'—'}</div></div>
+      <div><div style="color:var(--tx2);font-size:10px">Occupation</div><div>${p.occupation||'—'}</div></div>
+      <div><div style="color:var(--tx2);font-size:10px">Annual Income</div><div>${p.annual_income?'$'+Number(p.annual_income).toLocaleString():'—'}</div></div>
+    </div>
+    ${p.analyst_notes?`<div style="background:rgba(186,117,23,0.08);border-left:3px solid #BA7517;padding:8px 12px;border-radius:0 5px 5px 0;font-size:12px;margin-bottom:10px">
+      <div style="font-size:10px;color:#BA7517;font-weight:700;margin-bottom:2px">ANALYST NOTES</div>
+      <div>${p.analyst_notes}</div></div>`:''}
+    ${(p.risk_flags||[]).length?`<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:10px">
+      ${(p.risk_flags||[]).map(f=>`<span style="background:rgba(226,75,74,0.12);color:#E24B4A;border-radius:20px;padding:2px 8px;font-size:11px">${f}</span>`).join('')}
+    </div>`:''}
+    <button onclick="openKycProfile('${p.customer_id}')"
+      style="background:rgba(30,80,180,0.1);color:#1E50B4;border:1px solid rgba(30,80,180,0.2);border-radius:5px;padding:6px 14px;font-size:12px;cursor:pointer;font-weight:600">
+      Open Full KYC Profile →
+    </button>`;
+}
+
 
 </script>
 </body>
