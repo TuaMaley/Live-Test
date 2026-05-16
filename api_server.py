@@ -632,6 +632,14 @@ class AMLHandler(BaseHTTPRequestHandler):
                 _log({"user": officer, "action": "CASE_CLEARED_BY_SUPERVISOR",
                       "target": case_id, "detail": reason_text})
                 self._send({"ok": True, "action": "cleared", "case_id": case_id, "case": case})
+                # ── Persist cleared case to Railway MySQL ─────────────────────────
+                try:
+                    import db as _db
+                    if _db.is_db_available():
+                        _db.update_case_status(case_id, 'cleared', officer=officer)
+                        _db.log_audit(officer, 'CASE_CLEARED', case_id, 'Cleared by supervisor')
+                except Exception as _dbe:
+                    print(f'[DB] Case clear persist warning: {_dbe}', flush=True)
             elif action == "file_sar":
                 case["status"]     = "filed"
                 case["sar_status"] = "filed"
@@ -689,6 +697,20 @@ class AMLHandler(BaseHTTPRequestHandler):
                       "detail": f"FinCEN ref: {fincen_ref}. {len(linked_alerts)} alert(s) filed. Manual SAR: {case.get('manual_sar', False)}"})
                 self._send({"ok": True, "action": "filed", "fincen_ref": fincen_ref,
                             "alerts_filed": len(linked_alerts), "case": case})
+                # ── Persist SAR + case + alerts to Railway MySQL ──────────────
+                try:
+                    import db as _db
+                    if _db.is_db_available():
+                        _db.persist_sar({**sar, "narrative": case.get("narrative",""),
+                                         "alert_id": linked_alerts[0]["id"] if linked_alerts else None})
+                        _db.persist_case(case)
+                        for _pa in linked_alerts:
+                            _db.persist_alert(_pa)
+                        _db.log_audit(officer, "SAR_FILED_BY_SUPERVISOR", case_id,
+                                      f"FinCEN ref: {fincen_ref}")
+                        print(f"[DB] SAR {sar["id"]} persisted", flush=True)
+                except Exception as _dbe:
+                    print(f"[DB] SAR persist warning: {_dbe}", flush=True)
             else:
                 self._send({"error": "Unknown action"}, 400)
 
@@ -753,6 +775,16 @@ class AMLHandler(BaseHTTPRequestHandler):
             }
             _log({"user": officer, "action": "MANUAL_SAR_SUBMITTED",
                   "target": case_id, "detail": f"Manual SAR for {entity} ({typo})"})
+            # ── Persist to Railway MySQL ─────────────────────────────────────
+            try:
+                import db as _db
+                if _db.is_db_available():
+                    _db.persist_case(new_case)
+                    _db.log_audit(officer, "MANUAL_SAR_SUBMITTED", case_id,
+                                  f"Manual SAR for {entity} ({typo})")
+                    print(f"[DB] SAR case {case_id} persisted", flush=True)
+            except Exception as _dbe:
+                print(f"[DB] SAR persist warning: {_dbe}", flush=True)
             self._send({"ok": True, "case_id": case_id})
 
         elif len(parts) == 4 and parts[1] == "cases" and parts[3] == "set_review":
@@ -806,6 +838,30 @@ def run(port=None):
             _ds._ingest_dataset()
             _ds.DATASET_INGESTION_DONE = True
         print(f"  {len(_ds.ALERTS)} alerts loaded", flush=True)
+        # ── Connect to Railway MySQL and load persisted data ─────────────────
+        try:
+            import db as _db
+            import os as _os2
+            _mysql_host = _os2.environ.get("MYSQLHOST", "")
+            if _mysql_host:
+                print(f"  Connecting to Railway MySQL at {_mysql_host}...", flush=True)
+                _db.get_conn()  # test connection
+                _db.create_schema()  # create tables if first run
+                # Load persisted SARs
+                persisted_sars = _db.load_sars()
+                if persisted_sars:
+                    from data_store import SAR_RECORDS
+                    existing_ids = {s.get("id") for s in SAR_RECORDS}
+                    new_sars = [s for s in persisted_sars
+                                if s.get("id") not in existing_ids]
+                    SAR_RECORDS[:0] = new_sars
+                    print(f"  {len(persisted_sars)} SAR(s) loaded from Railway MySQL", flush=True)
+                else:
+                    print(f"  Railway MySQL ready — no SARs yet", flush=True)
+            else:
+                print(f"  No MYSQLHOST set — SAR persistence disabled", flush=True)
+        except Exception as _dbe:
+            print(f"  Railway MySQL warning: {_dbe}", flush=True)
     except Exception as _e:
         import traceback
         print(f"  Ingestion error: {_e}", flush=True)

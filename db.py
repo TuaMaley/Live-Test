@@ -537,3 +537,134 @@ def log_audit(user, action, target, detail='', ip=''):
 def add_notification(ntype, title, message, target_id='', severity='info'):
     execute("INSERT INTO notifications (type,title,message,target_id,severity,read_by) VALUES (%s,%s,%s,%s,%s,%s)",
             (ntype, title, message, target_id, severity, '[]'))
+
+
+# ── SAR persistence ───────────────────────────────────────────────────────────
+def persist_sar(sar: dict):
+    """Insert or update a SAR record in the database."""
+    try:
+        execute("""
+            INSERT INTO sar_records
+                (id, case_id, alert_id, entity, filing_officer,
+                 narrative, status, filed_at, fincen_ref, documents)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            ON DUPLICATE KEY UPDATE
+                status=VALUES(status),
+                narrative=VALUES(narrative),
+                filed_at=VALUES(filed_at),
+                fincen_ref=VALUES(fincen_ref)
+        """, (
+            sar.get('id'), sar.get('case_id'), sar.get('alert_id'),
+            sar.get('entity'), sar.get('officer') or sar.get('filing_officer'),
+            sar.get('narrative',''), sar.get('status','filed'),
+            sar.get('filed_date') or sar.get('filed_at'),
+            sar.get('fincen_ref',''),
+            json.dumps(sar.get('documents', [])),
+        ))
+    except Exception as e:
+        print(f"[DB] SAR persist error: {e}", flush=True)
+
+
+def load_sars():
+    """Load all SAR records from database."""
+    rows = execute("SELECT * FROM sar_records ORDER BY created_at DESC", fetch="all") or []
+    result = []
+    for r in rows:
+        d = dict(r)
+        for k, v in d.items():
+            if hasattr(v, 'isoformat'): d[k] = str(v)
+        for jk in ('documents',):
+            if jk in d and isinstance(d[jk], str):
+                try: d[jk] = json.loads(d[jk])
+                except: pass
+        result.append(d)
+    return result
+
+
+# ── Case persistence ──────────────────────────────────────────────────────────
+def persist_case(case: dict):
+    """Insert or update a case in the database."""
+    try:
+        execute("""
+            INSERT INTO cases
+                (id, entity, alert_ids, alert_count, priority, status,
+                 officer, opened, sar_due, typology, narrative,
+                 sar_status, escalated_by, escalated_at, manual_sar)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            ON DUPLICATE KEY UPDATE
+                status=VALUES(status),
+                officer=VALUES(officer),
+                sar_status=VALUES(sar_status),
+                narrative=VALUES(narrative),
+                escalated_by=VALUES(escalated_by),
+                escalated_at=VALUES(escalated_at),
+                alert_count=VALUES(alert_count),
+                alert_ids=VALUES(alert_ids)
+        """, (
+            case.get('id'), case.get('entity',''),
+            json.dumps(case.get('alerts',[])),
+            case.get('alert_count', len(case.get('alerts',[]))),
+            case.get('priority','medium'), case.get('status','open'),
+            case.get('officer',''), case.get('opened'),
+            case.get('sar_due'), case.get('typology',''),
+            case.get('narrative',''), case.get('sar_status'),
+            case.get('escalated_by'), case.get('escalated_at'),
+            1 if case.get('manual_sar') else 0,
+        ))
+    except Exception as e:
+        print(f"[DB] Case persist error: {e}", flush=True)
+
+
+# ── Alert status persistence ──────────────────────────────────────────────────
+def persist_alert(alert: dict):
+    """Insert or update an alert in the database."""
+    try:
+        execute("""
+            INSERT INTO alerts
+                (id, entity, amount, score, priority, typology, channel,
+                 timestamp, status, officer, case_id, txn_id,
+                 sender_bank, sender_country, bene_name, bene_bank,
+                 bene_country, bene_risk_score, bene_blacklist, kyc_level,
+                 jurisdiction, payment_rail, cross_border, velocity_3d,
+                 behavioral_drift, geo_location, model_scores, shap_data,
+                 notes, source)
+            VALUES
+                (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
+                 %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            ON DUPLICATE KEY UPDATE
+                status=VALUES(status),
+                officer=VALUES(officer),
+                case_id=VALUES(case_id)
+        """, (
+            alert.get('id'), alert.get('entity',''),
+            alert.get('amount'), alert.get('score'),
+            alert.get('priority'), alert.get('typology',''),
+            alert.get('channel',''), alert.get('timestamp'),
+            alert.get('status','open'), alert.get('officer'),
+            alert.get('case_id'), alert.get('txn_id'),
+            alert.get('sender_bank',''), alert.get('sender_country',''),
+            alert.get('bene_name',''), alert.get('bene_bank',''),
+            alert.get('bene_country',''),
+            alert.get('bene_risk_score', 0), alert.get('bene_blacklist', 0),
+            alert.get('kyc_level',''), alert.get('jurisdiction',''),
+            alert.get('payment_rail',''), alert.get('cross_border', 0),
+            alert.get('velocity_3d', 0), alert.get('behavioral_drift', 0),
+            alert.get('geo_location',''),
+            json.dumps(alert.get('model_scores',{})),
+            json.dumps(alert.get('shap',[])),
+            alert.get('notes',''), alert.get('source','dataset'),
+        ))
+    except Exception as e:
+        print(f"[DB] Alert persist error: {e}", flush=True)
+
+
+def is_db_available():
+    """Check if database is configured and reachable."""
+    import os as _os
+    if not (_os.environ.get('DATABASE_URL') or _os.environ.get('MYSQLHOST')):
+        return False
+    try:
+        get_conn()
+        return True
+    except Exception:
+        return False
