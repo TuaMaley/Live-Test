@@ -334,6 +334,8 @@ def _ingest_from_db():
         req = _ur.Request(url, headers={
             "X-Api-Key": api_key,
             "Content-Type": "application/json",
+            "bypass-tunnel-reminder": "true",   # skip localtunnel warning page
+            "User-Agent": "AML-TMS/1.0",
         })
         ctx = _ssl.create_default_context()
         ctx.check_hostname = False
