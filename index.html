@@ -1457,10 +1457,33 @@ async function alerts() {
 function openAlertDetail(id){ _detailAlertId=id; go('alerts'); }
 
 async function alertDetail(id) {
-  const [a, txData] = await Promise.all([
-    api("/api/alerts/" + id) || {},
-    api("/api/alerts/" + id + "/transactions") || {}
-  ]);
+  // Show loading state immediately
+  var ct = document.getElementById("content");
+  if (ct) ct.innerHTML = '<div style="padding:60px;text-align:center"><div class="spinner"></div><div style="color:var(--tx2);margin-top:12px;font-size:13px">Loading alert detail...</div></div>';
+
+  var aRaw, txRaw;
+  try {
+    var results = await Promise.all([
+      api("/api/alerts/" + id),
+      api("/api/alerts/" + id + "/transactions")
+    ]);
+    aRaw   = results[0];
+    txRaw  = results[1];
+  } catch(_e) {
+    aRaw = null; txRaw = null;
+  }
+
+  // Null-guard: if either call failed, show error
+  var a      = aRaw  || {};
+  var txData = txRaw || {};
+
+  if (!a.id) {
+  if (!a.id) {
+    if (ct) ct.innerHTML = '<div style="padding:40px;text-align:center;color:var(--tx2)"><div style="font-size:32px;margin-bottom:12px">&#9888;</div><div style="font-size:15px;font-weight:600;margin-bottom:8px">Alert not found</div><div style="font-size:13px">Alert ID: ' + id + '</div><button onclick="_detailAlertId=null;go(&quot;alerts&quot;)" style="margin-top:16px;padding:8px 18px;background:#1E50B4;color:#fff;border:none;border-radius:6px;cursor:pointer">Back to Queue</button></div>';
+    return;
+  }
+    return;
+  }
 
   var flaggedTxns = txData.flagged || [];
   var contextTxns = txData.context || [];
@@ -6071,6 +6094,7 @@ window._goFinal = async function(page) {
     dashboard:'dashboard', pipeline:'pipeline', models:'models',
     scorer:'scorer', alerts:'alerts', cases:'cases',
     deployment:'deployment', compliance:'compliance', audit:'audit',
+    kyc:'kyc',
     sanctions:'sanctionsScreen', notifications:'notifications',
     analytics:'analytics', trends:'trends', geographic:'geographic',
     reports:'reports', users:'userManagement', profile:'myProfile',
