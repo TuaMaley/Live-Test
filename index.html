@@ -2820,25 +2820,37 @@ ${log.map(e=>`<div class="arow">
 // ── Live feed ─────────────────────────────────────────────────────────────────
 function startLiveFeed() {
   const feed=$('live-feed');
-  if(!feed)return;
-  async function tick(){
+  if(!feed) return;
+
+  var _lastSyntheticTime = 0;
+  var _SYNTHETIC_INTERVAL = 30000; // synthetic transactions drop every 30 seconds
+
+  async function tick() {
     const txn = await api('/api/live/transaction');
-    if(!txn||!$('live-feed'))return;
-    const col=sc(txn.score);
-    const row=document.createElement('div');
-    row.className='lr';
-    row.innerHTML=`<div class="lsc" style="background:${txn.score>=65?col+'22':'#E0F5EC44'};color:${col}">${txn.score}</div><span style="flex:1;font-weight:500;font-size:12px">${txn.entity}</span><span style="color:var(--tx2);font-size:11px">${txn.channel}</span><span style="font-weight:600;font-size:12px;margin-left:7px">${fmt(txn.amount)}</span>${txn.alert_id?`<span style="font-size:10px;color:var(--red);margin-left:5px;font-family:monospace">⚠${txn.alert_id}</span>`:''}`;
-    feed.prepend(row);
-    while(feed.children.length>8)feed.removeChild(feed.lastChild);
-    $('txn-rate').innerHTML=`<span class="dot"></span>${((txn.score||0),(12800+Math.round(Math.random()*400))).toLocaleString()} txns/min`;
-    // Track live alerts in session variable (used by Alert Queue Today tab)
-    // but DO NOT update Today's Alerts dashboard card — that uses backend date-filter
-    if (txn.alert_id) {
-      window._todayAlertCount = (window._todayAlertCount || 0) + 1;
+    if (!txn || !$('live-feed')) return;
+
+    var isBankTxn = txn.source === 'bank';
+    var now = Date.now();
+
+    // Bank transactions always show immediately
+    // Synthetic transactions only show every 30 seconds
+    if (!isBankTxn && (now - _lastSyntheticTime) < _SYNTHETIC_INTERVAL) {
+      return;
     }
+    if (!isBankTxn) _lastSyntheticTime = now;
+
+    const col = sc(txn.score);
+    const row = document.createElement('div');
+    row.className = 'lr';
+    row.innerHTML = `<div class="lsc" style="background:${txn.score>=65?col+'22':'#E0F5EC44'};color:${col}">${txn.score}</div>${isBankTxn ? '<span style="background:rgba(30,164,100,0.15);color:#1EA064;border-radius:3px;padding:0 5px;font-size:9px;font-weight:700;margin-right:4px">BANK</span>' : ''}<span style="flex:1;font-weight:500;font-size:12px">${txn.entity}</span><span style="color:var(--tx2);font-size:11px">${txn.channel}</span><span style="font-weight:600;font-size:12px;margin-left:7px">${fmt(txn.amount)}</span>${txn.alert_id ? `<span style="font-size:10px;color:var(--red);margin-left:5px;font-family:monospace">&#9888;${txn.alert_id}</span>` : ''}`;
+    $('txn-rate').innerHTML = `<span class="dot"></span>${(12800+Math.round(Math.random()*400)).toLocaleString()} txns/min`;
+    if (txn.alert_id) window._todayAlertCount = (window._todayAlertCount || 0) + 1;
+    feed.prepend(row);
+    while (feed.children.length > 8) feed.removeChild(feed.lastChild);
   }
+
   tick();
-  _liveFeedTimer=setInterval(tick,1100);
+  _liveFeedTimer = setInterval(tick, 1100);
 }
 
 // ── Health check ──────────────────────────────────────────────────────────────

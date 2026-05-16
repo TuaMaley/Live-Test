@@ -94,8 +94,20 @@ SAR_RECORDS = [
 # ── Live transaction feed generator ─────────────────────────────────────────
 _feed_counter = 2842
 
+# ── Bank webhook live feed queue ─────────────────────────────────────────────
+# When bank pushes transactions via webhook, they go here first
+# The live feed endpoint drains this queue before generating synthetic ones
+from collections import deque as _deque
+BANK_LIVE_QUEUE = _deque(maxlen=50)  # holds last 50 bank transactions
+
+
 def generate_live_transaction():
     global _feed_counter
+    # ── Bank webhook transactions take priority in live feed ──────────────────
+    if BANK_LIVE_QUEUE:
+        bank_txn = BANK_LIVE_QUEUE.popleft()
+        return bank_txn
+    # ── Fallback: synthetic transaction ───────────────────────────────────────
     score = random.choices(
         [random.randint(0, 40), random.randint(41, 64),
          random.randint(65, 84), random.randint(85, 100)],
@@ -755,6 +767,24 @@ def ingest_single_transaction(txn: dict) -> str:
     ALERTS.insert(0, alert)
 
     print(f"[DataStore] Alert {alert_id} created: {entity} score={score} {priority}", flush=True)
+
+    # Push to live feed queue so it appears in the dashboard live feed
+    live_entry = {
+        "txn_id":    txn_id,
+        "entity":    entity,
+        "channel":   channel,
+        "amount":    amount,
+        "score":     score,
+        "priority":  priority,
+        "alert_id":  alert_id,
+        "timestamp": ts,
+        "source":    "bank",
+        "typology":  typology,
+        "sender_bank":   txn.get("sender_bank", ""),
+        "bene_country":  txn.get("bene_country", ""),
+    }
+    BANK_LIVE_QUEUE.append(live_entry)
+
     return alert_id
 
 
