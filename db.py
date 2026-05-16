@@ -36,12 +36,17 @@ def get_conn():
         port     = int(os.environ.get("MYSQLPORT", os.environ.get("DB_PORT",     3306)))
         db       = os.environ.get("MYSQLDATABASE", os.environ.get("DB_NAME",     "aml_tms"))
 
+    # Cloudflare tunnel uses port 443 with SSL
+    use_ssl = (port == 443)
+    ssl_params = {"ssl": {"ssl_disabled": False}} if use_ssl else {}
+
     _conn = pymysql.connect(
         host=host, port=port, user=user, password=password,
         database=db, charset="utf8mb4",
         cursorclass=pymysql.cursors.DictCursor,
         autocommit=True,
-        connect_timeout=10,
+        connect_timeout=15,
+        **ssl_params,
     )
     print(f"[DB] Connected to MySQL at {host}:{port}/{db}", flush=True)
     return _conn
