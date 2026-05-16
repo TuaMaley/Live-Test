@@ -1645,9 +1645,73 @@ async function alertDetail(id) {
     + '</div></div>';
   container.appendChild(metaCard);
 
+  // ── Action Panel — analyst decision buttons ─────────────────────────────
+  var actionCard = document.createElement("div");
+  actionCard.className = "card";
+  actionCard.style.cssText = "margin-bottom:14px;border:1px solid rgba(30,80,180,0.2);background:rgba(30,80,180,0.04)";
+  actionCard.innerHTML = '<div class="ch" style="align-items:center">'
+    + '<span class="ct">Analyst Decision</span>'
+    + '<span style="font-size:11px;color:var(--tx2);margin-left:8px">· Select an action to progress this alert</span>'
+    + '</div>'
+    + '<div class="cb">'
+    + '<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">'
+    // Escalate to Case
+    + `<button onclick="escalateAlertToCase('${a.id}')" style="background:#1E50B4;color:#fff;border:none;border-radius:6px;padding:9px 18px;font-size:13px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:6px">`
+    + '&#8679; Escalate to Case</button>'
+    // Mark as Review
+    + `<button onclick="updateAlertStatus('${a.id}','review')" style="background:rgba(186,117,23,0.12);color:#BA7517;border:1px solid rgba(186,117,23,0.3);border-radius:6px;padding:9px 18px;font-size:13px;font-weight:600;cursor:pointer">`
+    + '&#9998; Mark for Review</button>'
+    // Clear — False Positive
+    + `<button onclick="updateAlertStatus('${a.id}','cleared')" style="background:rgba(30,164,100,0.1);color:#1EA064;border:1px solid rgba(30,164,100,0.25);border-radius:6px;padding:9px 18px;font-size:13px;font-weight:600;cursor:pointer">`
+    + '&#10003; Clear — False Positive</button>'
+    + '<div style="margin-left:auto;font-size:11px;color:var(--tx2)">Alert: ' + a.id + ' · Status: <strong>' + (a.status||'open') + '</strong></div>'
+    + '</div>'
+    + '</div>';
+  container.appendChild(actionCard);
+
   var ct = document.getElementById("content");
   ct.innerHTML = "";
   ct.appendChild(container);
+}
+
+// ── Escalate alert to case ────────────────────────────────────────────────────
+async function escalateAlertToCase(alertId) {
+  if (!confirm("Escalate this alert to Case Management for full investigation?")) return;
+  const res = await api("/api/alerts/" + alertId + "/action", {
+    method: "POST",
+    body: JSON.stringify({
+      action:  "create_case",
+      officer: window._currentUser || "Analyst",
+      notes:   "Escalated from Alert Queue for investigation."
+    })
+  });
+  if (res && res.ok) {
+    alert("✓ Alert escalated to Case " + (res.case_id || "") + "\nNavigating to Case Management...");
+    _detailAlertId = null;
+    go("cases");
+  } else {
+    alert("Escalation failed: " + (res && res.error ? res.error : "Unknown error"));
+  }
+}
+
+async function updateAlertStatus(alertId, newStatus) {
+  var labels = {review: "Mark for Review", cleared: "Clear as False Positive"};
+  if (!confirm(labels[newStatus] + "?")) return;
+  const action = newStatus === "cleared" ? "clear" : "escalate";
+  const res = await api("/api/alerts/" + alertId + "/action", {
+    method: "POST",
+    body: JSON.stringify({
+      action:  action,
+      officer: window._currentUser || "Analyst",
+      notes:   newStatus === "cleared" ? "Cleared as false positive by analyst." : ""
+    })
+  });
+  if (res && res.ok) {
+    _detailAlertId = null;
+    go("alerts");
+  } else {
+    alert("Update failed: " + (res && res.error ? res.error : "Try again"));
+  }
 }
 
 function meta(label, val) {
