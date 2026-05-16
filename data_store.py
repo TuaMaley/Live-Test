@@ -427,7 +427,13 @@ def _ingest_from_db():
     cases_by_id  = {}
 
     for t in enriched_txns:
-        if not t.get("is_suspicious") and int(t.get("is_flagged",0)) == 0:
+        is_flagged   = int(t.get("is_flagged", 0) or 0)
+        is_suspicious= int(t.get("is_suspicious", 0) or 0)
+        risk_score   = int(float(t.get("risk_score") or t.get("source_alert_score") or 0))
+
+        # Only create alerts for genuinely suspicious transactions
+        # Must be flagged by bank OR have a meaningful risk score
+        if not is_flagged and not is_suspicious and risk_score < 55:
             continue
 
         alert_id = str(t.get("source_alert_id","")).strip()
@@ -437,7 +443,9 @@ def _ingest_from_db():
             alert_id = f"ALT-B{txn_id_short}"
 
         score    = int(float(t.get("risk_score") or t.get("source_alert_score") or 60))
-        typology = t.get("typology_label") or _infer_typology(t)
+        typology = (t.get("typology_label") or
+                    t.get("flag_reason","").replace("_"," ").title() or
+                    _infer_typology(t))
         entity   = t.get("entity_name","Unknown")
         channel  = t.get("channel","Wire Transfer")
         amount   = float(t.get("amount",0) or 0)

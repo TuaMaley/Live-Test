@@ -1209,6 +1209,19 @@ async function scoreTransaction() {
 // ── Alerts ────────────────────────────────────────────────────────────────────
 async function alerts() {
   if(_detailAlertId) { await alertDetail(_detailAlertId); return; }
+  // Show loading skeleton immediately so page is not blank
+  if ($('content') && !$('content').querySelector('.alert-queue-loaded')) {
+    $('content').innerHTML = `
+      <div style="padding:24px">
+        <div style="font-size:20px;font-weight:600;margin-bottom:20px">Alert Queue</div>
+        <div style="display:flex;gap:16px;margin-bottom:20px">
+          ${[1,2,3,4].map(()=>'<div style="flex:1;height:60px;background:var(--bdr);border-radius:8px;animation:pulse 1.2s infinite"></div>').join('')}
+        </div>
+        <div style="background:var(--bdr);border-radius:8px;height:400px;display:flex;align-items:center;justify-content:center;animation:pulse 1.2s infinite">
+          <span style="color:var(--tx2);font-size:13px">Loading alerts...</span>
+        </div>
+      </div>`;
+  }
   const data = await api('/api/alerts') || {};
   const rows = data.alerts || [];
 
