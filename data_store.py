@@ -816,19 +816,43 @@ def _priority(score):
 
 
 def _infer_typology(txn):
+    """Map bank transaction fields to standardised AML typology labels."""
     amount   = float(txn.get("amount") or 0)
-    channel  = str(txn.get("channel") or "")
+    channel  = str(txn.get("channel") or "").lower()
     cross    = int(txn.get("cross_border") or 0)
     vel3d    = float(txn.get("velocity_3d") or 0)
-    if "cash" in channel.lower() and amount < 10000:
+    flag     = str(txn.get("flag_reason") or "").lower()
+    atype    = str(txn.get("alert_type") or "").lower()
+
+    # Match flag_reason / alert_type to standard typologies
+    if any(w in flag+atype for w in ("structur","smurfing","threshold","cash deposit","below ctr")):
+        return "Structuring / threshold evasion"
+    if any(w in flag+atype for w in ("cross-border","cross border","international","swift","offshore")):
+        return "Cross-border layering"
+    if any(w in flag+atype for w in ("shell","layering","layer","round-trip")):
+        return "Layering"
+    if any(w in flag+atype for w in ("trade","invoice","import","export","trade-based")):
+        return "Trade-Based AML"
+    if any(w in flag+atype for w in ("crypto","bitcoin","virtual","digital asset","blockchain")):
+        return "Crypto/Virtual Assets"
+    if any(w in flag+atype for w in ("sanction","ofac","sdn","embarg","prohibit")):
+        return "Sanctions"
+    if any(w in flag+atype for w in ("fraud","cyber","phishing","scam","identity")):
+        return "Fraud/Cybercrime"
+    if any(w in flag+atype for w in ("velocity","spike","rapid","unusual frequency")):
+        return "Velocity / Unusual Pattern"
+    if any(w in flag+atype for w in ("high value","large","high-value")):
+        return "High-Value Transaction"
+    # Channel-based inference
+    if "cash" in channel and amount < 10000:
         return "Structuring / threshold evasion"
     if cross and amount > 100000:
         return "Cross-border layering"
-    if "crypto" in channel.lower():
-        return "Crypto / virtual asset layering"
+    if "crypto" in channel:
+        return "Crypto/Virtual Assets"
     if vel3d > 300:
-        return "Layering"
-    return "Suspicious activity"
+        return "Velocity / Unusual Pattern"
+    return "Suspicious Activity"
 
 # Ingestion is called by api_server.py after ML engine is ready
 DATASET_INGESTION_DONE = False

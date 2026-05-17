@@ -701,18 +701,23 @@ async function dashboard() {
 
   // ── Donut chart — real data from analytics API, onClick navigates to alerts ──
   // ── Donut chart — fetch real data async, update chart once loaded ─────────
+  // Direct map — each label IS the typology string used in alerts
+  // No grouping — each segment = one exact typology
   var _TYPO_MAP = {
-    'Layering':             ['Cross-border layering','Shell company / network layering','Shell company network'],
-    'Structuring':          ['Structuring / threshold evasion','Smurfing pattern','FX structuring'],
-    'Trade-Based AML':      ['Trade-based money laundering'],
-    'Crypto/Virtual Assets':['Crypto / virtual asset layering','Crypto conversion'],
-    'Fraud/Cybercrime':     ['Fraud / cybercrime proceeds'],
-    'Sanctions':            ['Sanctions-adjacent activity'],
+    'Structuring / threshold evasion': ['Structuring / threshold evasion'],
+    'Layering':                         ['Layering'],
+    'Trade-Based AML':                  ['Trade-Based AML'],
+    'Shell Company':                    ['Shell Company'],
+    'Smurfing':                         ['Smurfing'],
+    'Crypto/Virtual Assets':            ['Crypto/Virtual Assets'],
+    'Fraud/Cybercrime':                 ['Fraud/Cybercrime'],
+    'Cross-border layering':            ['Cross-border layering'],
+    'Sanctions':                        ['Sanctions'],
   };
-  var _typoColors = ['#7832B4','#1E50B4','#B8490A','#0F6E56','#E24B4A','#1EA064','#8892AA','#BA7517'];
+  var _typoColors = ['#7832B4','#1E50B4','#B8490A','#0F6E56','#E24B4A','#1EA064','#8892AA','#BA7517','#2196F3'];
   // Create chart with placeholder data — will be replaced once real data loads
   var _typoLabels = Object.keys(_TYPO_MAP);
-  var _typoValues = [151, 146, 52, 45, 34, 21]; // placeholder proportions only
+  var _typoValues = [148, 103, 85, 85, 70, 65, 52, 48, 34]; // placeholder — replaced by real data
   _chartInst.type = new Chart($('typeChart'), {
     type: 'doughnut',
     data: { labels: _typoLabels, datasets: [{ data: _typoValues, backgroundColor: _typoColors, borderWidth: 0, hoverOffset: 10 }] },
@@ -725,8 +730,9 @@ async function dashboard() {
       onClick: function(evt, elements) {
         if (!elements || !elements.length) return;
         var clickedLabel = _chartInst.type.data.labels[elements[0].index] || '';
-        var typoFilter   = _TYPO_MAP[clickedLabel] || [clickedLabel];
-        window._alertAdvanced = { typologyGroup: typoFilter, typology:'', channel:'', priority:'', country:'' };
+        // Use _TYPO_MAP if available, otherwise filter directly by the label
+        var typoFilter = _TYPO_MAP[clickedLabel] || [clickedLabel];
+        window._alertAdvanced = { typologyGroup: typoFilter, typology: clickedLabel, channel:'', priority:'', country:'' };
         window._alertFilter   = 'all';
         if (typeof window._goFinal === 'function') { window._goFinal('alerts'); }
         else if (typeof window.go === 'function')  { window.go('alerts'); }
@@ -736,15 +742,13 @@ async function dashboard() {
       },
     }
   });
-  // Now fetch real typology data and update chart + labels
+  // Fetch real typology breakdown from /api/stats (all 9 typologies, no grouping)
   (async function() {
-    var execD = await api('/api/analytics/executive?period=quarterly') || {};
-    var realTypo = (execD.breakdown||{}).by_typology || {};
+    var statsD = await api('/api/stats') || {};
+    var realTypo = statsD.typology_breakdown || {};
     if (Object.keys(realTypo).length && _chartInst.type) {
-      var rLabels = Object.keys(realTypo);
-      var rValues = Object.values(realTypo);
-      _chartInst.type.data.labels   = rLabels;
-      _chartInst.type.data.datasets[0].data = rValues;
+      _chartInst.type.data.labels   = Object.keys(realTypo);
+      _chartInst.type.data.datasets[0].data = Object.values(realTypo);
       _chartInst.type.update();
     }
   })();
@@ -1259,11 +1263,12 @@ async function alerts() {
     var f = window._alertAdvanced || {};
     return rows.filter(function(a) {
       if (f.channel && a.channel !== f.channel) return false;
-      // typologyGroup: array of typology strings (set when navigating from donut chart)
+      // typologyGroup: array OR single string — match any
       if (f.typologyGroup && f.typologyGroup.length) {
         if (f.typologyGroup.indexOf(a.typology) === -1) return false;
-      } else if (f.typology && a.typology !== f.typology) {
-        return false;
+      } else if (f.typology) {
+        // Partial match — covers bank flag_reason strings
+        if (a.typology.toLowerCase().indexOf(f.typology.toLowerCase()) === -1) return false;
       }
       if (f.priority && a.priority !== f.priority) return false;
       if (f.country  && (a.sender_country||a.country||'') !== f.country) return false;
