@@ -578,17 +578,9 @@ async function supqueue() {
   });
 }
 
-async function api(path, opts={}, timeoutMs=15000) {
+async function api(path, opts={}) {
   try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    const r = await fetch(API+path, {
-      headers:{'Content-Type':'application/json'},
-      signal: controller.signal,
-      ...opts
-    });
-    clearTimeout(timer);
-    if (!r.ok) return null;
+    const r = await fetch(API+path, {headers:{'Content-Type':'application/json'},...opts});
     return r.json();
   } catch(e) { return null; }
 }
@@ -620,7 +612,7 @@ async function dashboard() {
   let attempts = 0;
   let _alertCountFromReady = 0;
   while (!ready && attempts < 150) {
-    const r = await api('/api/ready', {}, 5000) || {};
+    const r = await api('/api/ready') || {};
     // ready=True only when ALERTS > 0 (backend guarantees this)
     if (r.ready && (r.total_alerts || r.alerts_loaded || 0) > 0) {
       ready = true;
@@ -759,8 +751,7 @@ async function dashboard() {
 
 
   // ── Alert preview ─────────────────────────────────────────────────────────
-  const adataRaw = await api('/api/alerts');
-  const adata = adataRaw || {};
+  const adata = await api('/api/alerts') || {};
   const alerts = (adata.alerts||[]).slice(0,5);
   $('alert-preview').innerHTML = `<table><thead><tr><th>ID</th><th>Entity</th><th>Score</th><th>Priority</th><th>Status</th></tr></thead><tbody>
     ${alerts.map(a=>`<tr onclick="go('alerts');setTimeout(()=>openAlertDetail('${a.id}'),80)" style="cursor:pointer">
@@ -1470,12 +1461,17 @@ async function alertDetail(id) {
   var ct = document.getElementById("content");
   if (ct) ct.innerHTML = '<div style="padding:60px;text-align:center"><div class="spinner"></div><div style="color:var(--tx2);margin-top:12px;font-size:13px">Loading alert detail...</div></div>';
 
-  var aRaw   = null;
-  var txRaw  = null;
-  try { aRaw  = await api("/api/alerts/" + id); }
-  catch(_e)  { aRaw = null; }
-  try { txRaw = await api("/api/alerts/" + id + "/transactions"); }
-  catch(_e)  { txRaw = null; }
+  var aRaw, txRaw;
+  try {
+    var results = await Promise.all([
+      api("/api/alerts/" + id),
+      api("/api/alerts/" + id + "/transactions")
+    ]);
+    aRaw   = results[0];
+    txRaw  = results[1];
+  } catch(_e) {
+    aRaw = null; txRaw = null;
+  }
 
   // Null-guard: if either call failed, show error
   var a      = aRaw  || {};
