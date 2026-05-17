@@ -578,10 +578,10 @@ async function supqueue() {
   });
 }
 
-async function api(path, opts={}) {
+async function api(path, opts={}, timeoutMs=15000) {
   try {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 8000);
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     const r = await fetch(API+path, {
       headers:{'Content-Type':'application/json'},
       signal: controller.signal,
@@ -620,7 +620,7 @@ async function dashboard() {
   let attempts = 0;
   let _alertCountFromReady = 0;
   while (!ready && attempts < 150) {
-    const r = await api('/api/ready') || {};
+    const r = await api('/api/ready', {}, 5000) || {};
     // ready=True only when ALERTS > 0 (backend guarantees this)
     if (r.ready && (r.total_alerts || r.alerts_loaded || 0) > 0) {
       ready = true;
@@ -759,7 +759,8 @@ async function dashboard() {
 
 
   // ── Alert preview ─────────────────────────────────────────────────────────
-  const adata = await api('/api/alerts') || {};
+  const adataRaw = await api('/api/alerts');
+  const adata = adataRaw || {};
   const alerts = (adata.alerts||[]).slice(0,5);
   $('alert-preview').innerHTML = `<table><thead><tr><th>ID</th><th>Entity</th><th>Score</th><th>Priority</th><th>Status</th></tr></thead><tbody>
     ${alerts.map(a=>`<tr onclick="go('alerts');setTimeout(()=>openAlertDetail('${a.id}'),80)" style="cursor:pointer">
