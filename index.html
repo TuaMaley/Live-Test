@@ -1317,7 +1317,7 @@ async function alerts() {
         + '<td style="padding:10px">' + pb(a.priority) + '</td>'
         + '<td style="padding:10px">' + sb(a.status) + '</td>'
         + '<td style="padding:10px;font-size:11px;color:var(--tx2)">' + ((a.timestamp||'').split(' ')[1]||'') + '</td>'
-        + '<td style="padding:10px"><button class="btn" onclick="openAlertDetail(\'' + a.id + '\')" style="font-size:11px;padding:3px 9px">Investigate &rarr;</button></td>'
+        + '<td style="padding:10px"><button class="btn" onclick="openInvestigateAlert(\'' + a.id + '\')" style="font-size:11px;padding:3px 9px">Investigate &rarr;</button></td>'
         + '</tr>';
     }).join('');
   }
@@ -1455,6 +1455,42 @@ async function alerts() {
 }
 
 function openAlertDetail(id){ _detailAlertId=id; go('alerts'); }
+
+// ── Investigate: auto-escalate if needed, then open Case Management ──────────
+async function openInvestigateAlert(alertId) {
+  // Show brief loading state
+  var ct = $('content');
+  if (ct) ct.innerHTML = '<div style="padding:60px;text-align:center"><div class="spinner"></div><div style="color:var(--tx2);margin-top:12px;font-size:13px">Opening investigation...</div></div>';
+
+  // Fetch the alert to get its case_id
+  var alert = await api('/api/alerts/' + alertId) || {};
+
+  if (!alert.id) {
+    // Can't load alert — just go to cases
+    go('cases'); return;
+  }
+
+  var caseId = alert.case_id;
+
+  // If no case exists yet — escalate first to create one
+  if (!caseId) {
+    var res = await api('/api/alerts/' + alertId + '/action', {
+      method: 'POST',
+      body: JSON.stringify({
+        action: 'create_case',
+        officer: window._currentUser || 'Analyst',
+        notes: 'Case created via Investigate from Alert Queue.'
+      })
+    });
+    caseId = res && res.case_id ? res.case_id : null;
+  }
+
+  // Navigate to Case Management with this case pre-selected
+  if (caseId) {
+    window._openCaseId = caseId;
+  }
+  go('cases');
+}
 
 async function alertDetail(id) {
   // Show loading state immediately
@@ -1825,6 +1861,10 @@ async function submitAssign(alertId) {
 
 // ── Cases ─────────────────────────────────────────────────────────────────────
 async function cases() {
+  // Check if we arrived here from Investigate — if so open that case directly
+  var _targetCaseId = window._openCaseId || null;
+  window._openCaseId = null; // clear after use
+
   const [data, queueData] = await Promise.all([
     api('/api/cases') || {},
     _userPerms.has('file_sar') ? api('/api/supervisor/queue') : Promise.resolve(null),
@@ -1900,7 +1940,7 @@ async function cases() {
       else if (c.sar_status==='escalated') sarBadge = '<span style="color:#5b8dee;font-size:12px">&#9650; Escalated</span>';
       else sarBadge = '<span style="color:#E67E22;font-size:12px">Pending</span>';
 
-      return '<tr data-cid="' + c.id + '" style="cursor:pointer;border-bottom:1px solid var(--bdr)">'
+      return '<tr data-cid="' + c.id + '" data-case-id="' + c.id + '" style="cursor:pointer;border-bottom:1px solid var(--bdr)">'
         + '<td style="padding:11px 10px;font-family:monospace;font-size:11px">' + c.id + '</td>'
         + '<td style="padding:11px 10px;font-weight:600;font-size:13px">' + (c.entity||'—') + '</td>'
         + '<td style="padding:11px 10px;text-align:center">' + (c.alert_count||0) + '</td>'
@@ -2033,6 +2073,20 @@ async function cases() {
 
   // Initial render — default to 'all'
   renderTable(window._caseFilter || 'all');
+
+  // Auto-open a specific case if we arrived from Investigate button
+  if (_targetCaseId) {
+    setTimeout(function() {
+      // Open the case directly using openCase() — same as clicking the row
+      if (typeof openCase === 'function') {
+        openCase(_targetCaseId);
+      } else {
+        // Fallback — click the row if it exists
+        var row = document.querySelector('[data-case-id="' + _targetCaseId + '"]');
+        if (row) row.click();
+      }
+    }, 300);
+  }
 }
 
 async function takeCaseAlert(alertId) {
